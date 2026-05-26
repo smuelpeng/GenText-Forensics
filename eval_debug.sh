@@ -14,13 +14,13 @@ else
 fi
 
 if [[ "$PIPELINE" == "prompt" ]]; then
-  RAW_JSONL="outputs/raw/docshield_api_val_${TAG}.jsonl"
-  OUT_JSON="outputs/eval/docshield_api_val_${TAG}.json"
-  OUT_CSV="outputs/eval/docshield_api_val_${TAG}.csv"
+  RAW_JSONL="${RAW_JSONL:-outputs/raw/docshield_api_val_${TAG}.jsonl}"
+  OUT_JSON="${OUT_JSON:-outputs/eval/docshield_api_val_${TAG}.json}"
+  OUT_CSV="${OUT_CSV:-outputs/eval/docshield_api_val_${TAG}.csv}"
 else
-  RAW_JSONL="outputs/raw/staged_docshield_api_val_${TAG}.jsonl"
-  OUT_JSON="outputs/eval/staged_docshield_api_val_${TAG}.json"
-  OUT_CSV="outputs/eval/staged_docshield_api_val_${TAG}.csv"
+  RAW_JSONL="${RAW_JSONL:-outputs/raw/staged_docshield_api_val_${TAG}.jsonl}"
+  OUT_JSON="${OUT_JSON:-outputs/eval/staged_docshield_api_val_${TAG}.json}"
+  OUT_CSV="${OUT_CSV:-outputs/eval/staged_docshield_api_val_${TAG}.csv}"
 fi
 
 "$PYTHON_BIN" scripts/eval_competition_aligned.py \

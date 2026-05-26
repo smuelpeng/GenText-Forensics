@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Staged evidence-grounded DocShield-style API baseline.
 
-This runner uses a four-stage pipeline over a base vision-language model:
+This runner uses a staged pipeline over a base vision-language model:
 
 1. OCR/Layout
 2. Evidence extraction
-3. Cross-cue validation + grounding
-4. Report synthesis
+3. Cross-cue validation
+4. Spatial grounding
+5. Report synthesis
 
 Ground-truth labels, masks, and reports are never included in model-visible
 messages. They are only read by the local evaluator.
@@ -36,6 +37,7 @@ from postprocess import parse_cct_report  # noqa: E402
 from staged_prompts import (  # noqa: E402
     SYSTEM_PROMPT,
     evidence_prompt,
+    grounding_prompt,
     ocr_layout_prompt,
     report_prompt,
     validation_prompt,
@@ -298,6 +300,36 @@ def normalize_validated(
                 }
             )
 
+    if verdict == "FORGED" and not normalized:
+        fallback_boxes = collect_candidate_boxes(evidence, width, height)
+        fallback_candidates: list[dict[str, Any]] = []
+        for key in ("visual_candidates", "logical_candidates"):
+            for candidate in evidence.get(key) or []:
+                if isinstance(candidate, dict):
+                    fallback_candidates.append(candidate)
+        fallback_candidates.sort(key=lambda c: float(c.get("confidence") or 0.0), reverse=True)
+        for idx, candidate in enumerate(fallback_candidates[:3], start=1):
+            cid = str(candidate.get("id") or "")
+            bbox = fallback_boxes.get(cid)
+            if not bbox:
+                span_ids = [str(v) for v in candidate.get("span_ids") or [] if str(v) in span_boxes]
+                bbox = union_boxes([span_boxes[sid] for sid in span_ids])
+            if not bbox:
+                continue
+            normalized.append(
+                {
+                    "id": f"fallback_{idx}",
+                    "category": "text tampering",
+                    "source_candidate_ids": [cid] if cid else [],
+                    "span_ids": [str(v) for v in candidate.get("span_ids") or [] if str(v) in span_boxes],
+                    "bbox": bbox,
+                    "visual_support": str(candidate.get("evidence") or ""),
+                    "logical_support": str(candidate.get("evidence") or ""),
+                    "reason": str(candidate.get("evidence") or "Validated document-authenticity anomaly."),
+                    "confidence": candidate.get("confidence", 0.5),
+                }
+            )
+
     if not normalized:
         verdict = "AUTHENTIC"
         risk_score = min(risk_score, 10)
@@ -471,13 +503,35 @@ def process_row(
             enable_thinking=enable_thinking,
             timeout=timeout,
         )
-        normalized_validation = normalize_validated(validation or {}, ocr_layout or {}, evidence or {}, width, height)
-        stage_outputs["validation_grounding"] = {
+        stage_outputs["validation"] = {
             "raw": validation_raw,
             "parsed": validation,
+        }
+        stage_usages["validation"] = usage
+
+        grounding_raw, usage, grounding = run_stage(
+            stage_name="grounding",
+            prompt=grounding_prompt(ocr_layout or {}, evidence or {}, validation or {}, str(image_name), width, height),
+            image_path=image_path,
+            model=model,
+            api_key=api_key,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            enable_thinking=enable_thinking,
+            timeout=timeout,
+        )
+        normalized_validation = normalize_validated(grounding or validation or {}, ocr_layout or {}, evidence or {}, width, height)
+        stage_outputs["grounding"] = {
+            "raw": grounding_raw,
+            "parsed": grounding,
             "normalized": normalized_validation,
         }
-        stage_usages["validation_grounding"] = usage
+        stage_outputs["validation_grounding"] = {
+            "raw": grounding_raw,
+            "parsed": grounding,
+            "normalized": normalized_validation,
+        }
+        stage_usages["grounding"] = usage
 
         report_raw, usage, _ = run_stage(
             stage_name="report",

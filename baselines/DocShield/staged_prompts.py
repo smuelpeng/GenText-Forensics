@@ -1,6 +1,6 @@
 """Prompts for the staged evidence-grounded CCT baseline.
 
-This module defines a four-stage API-only pipeline. It does not use labels,
+This module defines a staged API-only pipeline. It does not use labels,
 ground-truth reports, or masks in model-visible prompts; those are reserved for
 local evaluation only.
 """
@@ -14,8 +14,10 @@ from typing import Any
 SYSTEM_PROMPT = (
     "You are a document forensics examiner. Analyze only the provided image and "
     "the prior model-generated stage data. Never assume ground-truth labels. "
-    "Use conservative evidence standards: classify as FORGED only when concrete "
-    "visual or logical evidence survives validation."
+    "Use evidence standards for text-centric document safety: classify as FORGED "
+    "when concrete visual artifacts, text rendering defects, layout corruption, "
+    "or logical contradictions undermine document authenticity. Do not require "
+    "proof of attacker intent."
 )
 
 
@@ -107,7 +109,7 @@ def validation_prompt(
     width: int,
     height: int,
 ) -> str:
-    return f"""Stage 3: Cross-cue validation and grounding.
+    return f"""Stage 3: Cross-cue validation and filtering.
 
 Image: {image_name}
 Native image size: width={width}, height={height}.
@@ -129,7 +131,6 @@ Required JSON schema:
       "category": "Visual Clumsy|Logical Fraud|semantic_subtle|text tampering",
       "source_candidate_ids": ["v1", "l1"],
       "span_ids": ["s1"],
-      "bbox": [x1, y1, x2, y2],
       "visual_support": "visual evidence in the document's main language",
       "logical_support": "logical evidence in the document's main language",
       "reason": "final reason in the document's main language",
@@ -139,15 +140,70 @@ Required JSON schema:
   "discarded_candidates": [
     {{"id": "v1", "reason": "why discarded in the document's main language"}}
   ],
+  "validation_policy": "short statement"
+}}
+
+Rules:
+- Validate candidates as document-authenticity evidence. Do not discard an anomaly merely because it could be caused by generation, OCR, proofreading, formatting, or template errors; those visible/logical defects can still indicate a forged or manipulated document in this benchmark.
+- Discard only candidates that are genuinely benign, unreadable, unsupported by the image/OCR, or too vague to locate.
+- Logical contradictions that change document meaning, impossible dates, broken numbering, malformed names, garbled critical text, or inconsistent totals should usually survive validation even when visual artifacts are subtle.
+- Visual artifacts such as font/rendering mismatch, copy-paste boundaries, localized blur, color/edge inconsistency, or layout corruption should survive when they are localized.
+- If verdict is AUTHENTIC, validated_anomalies must be an empty array and risk_score must be 0-10.
+- If verdict is FORGED, every anomaly must keep source_candidate_ids or span_ids so the next grounding stage can map it to coordinates.
+"""
+
+
+def grounding_prompt(
+    ocr_layout: dict[str, Any],
+    evidence: dict[str, Any],
+    validated: dict[str, Any],
+    image_name: str,
+    width: int,
+    height: int,
+) -> str:
+    return f"""Stage 4: Spatial grounding for validated anomalies.
+
+Image: {image_name}
+Native image size: width={width}, height={height}.
+Stage 1 OCR/Layout JSON:
+{_json_dumps(ocr_layout)}
+
+Stage 2 Evidence JSON:
+{_json_dumps(evidence)}
+
+Stage 3 Validated Anomalies JSON:
+{_json_dumps(validated)}
+
+Return ONLY valid JSON. Do not wrap in Markdown.
+
+Required JSON schema:
+{{
+  "verdict": "FORGED|AUTHENTIC",
+  "risk_score": 0,
+  "validated_anomalies": [
+    {{
+      "id": "a1",
+      "category": "Visual Clumsy|Logical Fraud|semantic_subtle|text tampering",
+      "source_candidate_ids": ["v1", "l1"],
+      "span_ids": ["s1"],
+      "bbox": [x1, y1, x2, y2],
+      "visual_support": "visual evidence in the document's main language",
+      "logical_support": "logical evidence in the document's main language",
+      "reason": "final reason in the document's main language",
+      "confidence": 0.0
+    }}
+  ],
+  "discarded_candidates": [],
   "grounding_policy": "short statement"
 }}
 
 Rules:
-- Validate candidates conservatively. Discard weak, isolated, or generic concerns.
-- Grounding must come from OCR span boxes, candidate boxes, or their union. Do not invent unrelated coordinates.
-- If verdict is AUTHENTIC, validated_anomalies must be an empty array and risk_score must be 0-10.
-- If verdict is FORGED, every anomaly needs a bbox and reason.
-- Use native image pixel coordinates, integers, ordered as x1<x2 and y1<y2.
+- Ground every Stage 3 anomaly by matching its span_ids/source_candidate_ids to Stage 1 OCR boxes and Stage 2 candidate boxes.
+- Grounding must come from OCR span boxes, candidate boxes, or their tight union. Do not invent unrelated coordinates.
+- If an anomaly is logical but references text, ground the exact text span(s) that carry the contradiction.
+- If an anomaly has source_candidate_ids but no span_ids, use the candidate bbox.
+- If verdict is FORGED, every anomaly must have a valid bbox in native pixel coordinates.
+- If verdict is AUTHENTIC, return no anomalies and no boxes.
 """
 
 
@@ -158,7 +214,7 @@ def report_prompt(
     width: int,
     height: int,
 ) -> str:
-    return f"""Stage 4: Final report synthesis.
+    return f"""Stage 5: Final report synthesis.
 
 Image: {image_name}
 Native image size: width={width}, height={height}.

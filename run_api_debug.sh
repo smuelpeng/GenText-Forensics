@@ -12,21 +12,23 @@ else
 fi
 
 if [[ "$PIPELINE" == "prompt" ]]; then
+  RAW_JSONL="${OUTPUT_JSONL:-outputs/raw/docshield_api_val_${TAG}.jsonl}"
   "$PYTHON_BIN" baselines/DocShield/run_docshield_api.py \
     --model "${MODEL:-qwen3-vl-flash}" \
     --prompt-mode "${PROMPT_MODE:-cct}" \
     --input-jsonl data/val_300.jsonl \
-    --output-jsonl "outputs/raw/docshield_api_val_${TAG}.jsonl" \
+    --output-jsonl "$RAW_JSONL" \
     --api-key-file "${API_KEY_FILE:-/Users/penpen/Desktop/api-key.txt}" \
     --max-tokens "${MAX_TOKENS:-8192}" \
     --max-samples "$MAX_SAMPLES" \
     --num-workers "${NUM_WORKERS:-1}" \
     --resume
 else
+  RAW_JSONL="${OUTPUT_JSONL:-outputs/raw/staged_docshield_api_val_${TAG}.jsonl}"
   "$PYTHON_BIN" baselines/DocShield/run_staged_docshield_api.py \
     --model "${MODEL:-qwen3.6-35b-a3b}" \
     --input-jsonl data/val_300.jsonl \
-    --output-jsonl "outputs/raw/staged_docshield_api_val_${TAG}.jsonl" \
+    --output-jsonl "$RAW_JSONL" \
     --api-key-file "${API_KEY_FILE:-/Users/penpen/Desktop/api-key.txt}" \
     --max-tokens "${MAX_TOKENS:-8192}" \
     --max-samples "$MAX_SAMPLES" \
