@@ -1,0 +1,9 @@
+# Minimal runtime for debug_distribution
+numpy
+pillow
+tqdm
+
+# Optional: enables BERTScore S_Exp instead of --skip-bertscore token-F1 fallback.
+bert-score
+torch
+transformers

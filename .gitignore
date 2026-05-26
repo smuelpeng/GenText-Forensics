@@ -1,0 +1,9 @@
+api-key.txt
+.env
+data/
+outputs/raw/*.jsonl
+outputs/eval/*.json
+outputs/eval/*.csv
+.venv/
+__pycache__/
+*.pyc

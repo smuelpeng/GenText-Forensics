@@ -1,0 +1,13 @@
+name: gentext-debug
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - numpy
+      - pillow
+      - tqdm
+      - bert-score
+      - torch
+      - transformers

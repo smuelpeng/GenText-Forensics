@@ -1,0 +1,29 @@
+{
+  "created_at": "2026-05-26T18:00:26",
+  "source_split": "/mnt/pfs/users/yuzhipeng/workspace/textShield/gentext-forensics/data/splits/val_1000.jsonl",
+  "sample_count": 300,
+  "label_counts": {
+    "AUTHENTIC": 148,
+    "FORGED": 152
+  },
+  "language_counts": {
+    "zh": 62,
+    "en": 61,
+    "id": 39,
+    "ar": 43,
+    "th": 52,
+    "ms": 43
+  },
+  "mask_count": 152,
+  "missing_assets": [],
+  "files": {
+    "data/val_300.jsonl": "a1c3e7058ee625571211b46c426580fbb419def05ec65bd6ad328db777461255",
+    "scripts/eval_competition_aligned.py": "8f7bf6214cefa8fb878046930e61f0fa44e5b4b87daa189dd261a3efef9be16a",
+    "baselines/DocShield/run_docshield_api.py": "b32582b2c36d1139542591b1100d80430ca3800ac1e8978050803b1d5809c8fd",
+    "baselines/DocShield/cct_prompt.py": "e19a304c77780628b01fb9077305435e0b8d24cf12af578d55089755b5926813",
+    "baselines/DocShield/postprocess.py": "efe5b230245e70415c8b52c0d4c8637952405cf8ed9fc3a5b74850434430f7c6",
+    "requirements.txt": "1b7451f98630ad0fea866e4b0043d38f3a61e8d821e236110f777ed3bfe9af01",
+    "environment.yml": "e376a9ff29a820c407b217448894c94092e5d4a96d6a17054f5f44b990f7d713",
+    "README.md": "f157a8cbbacfbbbe922ff83c57d7079b1eb6c1ab61ac4fdd0483dbbad5f9ee6e"
+  }
+}
