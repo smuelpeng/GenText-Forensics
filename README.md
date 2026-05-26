@@ -15,7 +15,7 @@ debug_distribution/
 │   └── reports/               # 复制出来的 GT 报告
 ├── baselines/DocShield/
 │   ├── cct_prompt.py              # DocShield 风格的 6-stage 单 prompt baseline
-│   ├── staged_prompts.py          # 4-step staged evidence-grounded prompts
+│   ├── staged_prompts.py          # staged evidence-grounded prompts
 │   ├── postprocess.py             # report/grounding 解析工具
 │   ├── run_docshield_api.py       # 单 prompt DashScope API 推理脚本
 │   └── run_staged_docshield_api.py # staged API 推理脚本
@@ -96,6 +96,7 @@ MAX_SAMPLES=3 ./run_api_debug.sh
 - 最大输出：`8192` tokens
 - 样本数：`60`
 - API key：`/Users/penpen/Desktop/api-key.txt`
+- forged 风险阈值：`80`，可用 `FORGED_RISK_THRESHOLD` 覆盖
 
 推理结果会写到：
 
@@ -107,7 +108,17 @@ outputs/raw/staged_docshield_api_val_60.jsonl
 
 - `raw_output`：最终 Markdown 鉴伪报告，用于评测
 - `raw_output_full`：模型原始输出，方便排查格式问题
-- `stage_outputs`：OCR/Layout、证据候选、验证与 grounding、最终报告等中间结果，只用于调试，不用于提交
+- `stage_outputs`：OCR/Layout、证据候选、交叉验证、grounding、最终报告等中间结果，只用于调试，不用于提交
+
+当前 staged baseline 采用无训练的 DocShield/CCT proxy：
+
+1. OCR/Layout
+2. Evidence extraction
+3. Cross-cue validation
+4. Spatial grounding
+5. Report synthesis
+
+最终报告会做两个确定性后处理：补齐评测需要的报告结构标记；当模型判为 `FORGED` 但 `RISK_SCORE < FORGED_RISK_THRESHOLD` 时降级为 `AUTHENTIC`，用于降低低置信假阳性。
 
 如果需要回退到旧的单 prompt CCT baseline：
 
@@ -120,6 +131,16 @@ PIPELINE=prompt MODEL=qwen3-vl-flash ./run_api_debug.sh
 ```bash
 MAX_SAMPLES=0 ./run_api_debug.sh
 MAX_SAMPLES=0 ./eval_debug.sh
+```
+
+如果需要为实验保留不同输出文件，可以覆盖输出路径：
+
+```bash
+OUTPUT_JSONL=outputs/raw/my_experiment_60.jsonl ./run_api_debug.sh
+RAW_JSONL=outputs/raw/my_experiment_60.jsonl \
+OUT_JSON=outputs/eval/my_experiment_60.json \
+OUT_CSV=outputs/eval/my_experiment_60.csv \
+./eval_debug.sh
 ```
 
 ## 本地评测

@@ -33,5 +33,6 @@ else
     --max-tokens "${MAX_TOKENS:-8192}" \
     --max-samples "$MAX_SAMPLES" \
     --num-workers "${NUM_WORKERS:-1}" \
+    --forged-risk-threshold "${FORGED_RISK_THRESHOLD:-80}" \
     --resume
 fi

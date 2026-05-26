@@ -430,6 +430,18 @@ def ensure_report_structure(report: str) -> str:
     return text
 
 
+def authentic_downgrade_report(ocr_layout: dict[str, Any]) -> str:
+    return fallback_report(
+        ocr_layout,
+        {
+            "verdict": "AUTHENTIC",
+            "risk_score": 5,
+            "validated_anomalies": [],
+            "discarded_candidates": [],
+        },
+    )
+
+
 def run_stage(
     *,
     stage_name: str,
@@ -468,6 +480,7 @@ def process_row(
     temperature: float,
     enable_thinking: bool,
     timeout: int,
+    forged_risk_threshold: int,
 ) -> dict[str, Any]:
     sample_id = row.get("sample_id")
     image_name = row.get("image_file") or Path(str(row.get("image_path") or "")).name
@@ -568,6 +581,13 @@ def process_row(
         if parsed_report.get("conclusion") == "UNKNOWN":
             final_report = ensure_report_structure(fallback_report(ocr_layout or {}, normalized_validation))
             parsed_report = parse_cct_report(final_report)
+        if (
+            parsed_report.get("conclusion") == "FORGED"
+            and parsed_report.get("risk_score") is not None
+            and int(parsed_report.get("risk_score") or 0) < forged_risk_threshold
+        ):
+            final_report = ensure_report_structure(authentic_downgrade_report(ocr_layout or {}))
+            parsed_report = parse_cct_report(final_report)
 
         stage_outputs["report"] = {"raw": report_raw}
         stage_usages["report"] = usage
@@ -631,6 +651,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--enable-thinking", action="store_true")
     p.add_argument("--resume", action="store_true")
     p.add_argument("--timeout", type=int, default=180)
+    p.add_argument("--forged-risk-threshold", type=int, default=80)
     return p.parse_args()
 
 
@@ -691,6 +712,7 @@ def main() -> None:
         "temperature": args.temperature,
         "enable_thinking": args.enable_thinking,
         "timeout": args.timeout,
+        "forged_risk_threshold": args.forged_risk_threshold,
     }
 
     if args.num_workers <= 1:
