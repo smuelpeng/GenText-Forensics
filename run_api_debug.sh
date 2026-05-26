@@ -1,12 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
-python baselines/DocShield/run_docshield_api.py \
-  --model "${MODEL:-qwen3-vl-flash}" \
-  --prompt-mode "${PROMPT_MODE:-cct}" \
-  --input-jsonl data/val_300.jsonl \
-  --output-jsonl outputs/raw/docshield_api_val_300.jsonl \
-  --api-key-file "${API_KEY_FILE:-api-key.txt}" \
-  --max-tokens "${MAX_TOKENS:-8192}" \
-  --num-workers "${NUM_WORKERS:-4}" \
-  --resume
+
+PIPELINE="${PIPELINE:-staged}"
+MAX_SAMPLES="${MAX_SAMPLES:-60}"
+PYTHON_BIN="${PYTHON:-python3}"
+if [[ "$MAX_SAMPLES" == "0" ]]; then
+  TAG="300"
+else
+  TAG="$MAX_SAMPLES"
+fi
+
+if [[ "$PIPELINE" == "prompt" ]]; then
+  "$PYTHON_BIN" baselines/DocShield/run_docshield_api.py \
+    --model "${MODEL:-qwen3-vl-flash}" \
+    --prompt-mode "${PROMPT_MODE:-cct}" \
+    --input-jsonl data/val_300.jsonl \
+    --output-jsonl "outputs/raw/docshield_api_val_${TAG}.jsonl" \
+    --api-key-file "${API_KEY_FILE:-/Users/penpen/Desktop/api-key.txt}" \
+    --max-tokens "${MAX_TOKENS:-8192}" \
+    --max-samples "$MAX_SAMPLES" \
+    --num-workers "${NUM_WORKERS:-1}" \
+    --resume
+else
+  "$PYTHON_BIN" baselines/DocShield/run_staged_docshield_api.py \
+    --model "${MODEL:-qwen3.6-35b-a3b}" \
+    --input-jsonl data/val_300.jsonl \
+    --output-jsonl "outputs/raw/staged_docshield_api_val_${TAG}.jsonl" \
+    --api-key-file "${API_KEY_FILE:-/Users/penpen/Desktop/api-key.txt}" \
+    --max-tokens "${MAX_TOKENS:-8192}" \
+    --max-samples "$MAX_SAMPLES" \
+    --num-workers "${NUM_WORKERS:-1}" \
+    --resume
+fi
