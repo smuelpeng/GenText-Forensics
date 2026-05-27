@@ -25,6 +25,10 @@ if [[ "$PIPELINE" == "prompt" ]]; then
     --resume
 else
   RAW_JSONL="${OUTPUT_JSONL:-outputs/raw/staged_docshield_api_val_${TAG}.jsonl}"
+  BENIGN_REVIEWER_ARGS=()
+  if [[ "${DISABLE_BENIGN_REVIEWER:-0}" == "1" ]]; then
+    BENIGN_REVIEWER_ARGS+=(--disable-benign-reviewer)
+  fi
   "$PYTHON_BIN" baselines/DocShield/run_staged_docshield_api.py \
     --model "${MODEL:-qwen3.6-35b-a3b}" \
     --ocr-model "${OCR_MODEL:-}" \
@@ -38,5 +42,10 @@ else
     --forged-risk-thresholds "${FORGED_RISK_THRESHOLDS:-ar=70,id=75}" \
     --grounding-box-scale-x "${GROUNDING_BOX_SCALE_X:-3.5}" \
     --grounding-box-scale-y "${GROUNDING_BOX_SCALE_Y:-4.0}" \
+    --benign-reviewer-max-risk "${BENIGN_REVIEWER_MAX_RISK:-95}" \
+    --benign-reviewer-min-hits "${BENIGN_REVIEWER_MIN_HITS:-1}" \
+    --benign-reviewer-max-strong-hits "${BENIGN_REVIEWER_MAX_STRONG_HITS:-1}" \
+    --benign-reviewer-max-anomalies "${BENIGN_REVIEWER_MAX_ANOMALIES:-1}" \
+    "${BENIGN_REVIEWER_ARGS[@]}" \
     --resume
 fi

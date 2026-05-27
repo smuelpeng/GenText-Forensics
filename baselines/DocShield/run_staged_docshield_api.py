@@ -177,6 +177,189 @@ def call_api(
 
 JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 GROUNDING_BOX_RE = re.compile(r"\[GROUNDING\]\s*:\s*\[([^\[\]]+)\]", re.IGNORECASE)
+ANOMALY_HEADING_RE = re.compile(r"###\s*ANOMALY", re.IGNORECASE)
+
+BENIGN_ERROR_TERMS = (
+    "ocr",
+    "scan",
+    "scanned",
+    "scanning",
+    "digitization",
+    "digitized",
+    "reproduction",
+    "encoding",
+    "mojibake",
+    "font substitution",
+    "rendering failure",
+    "rendering defect",
+    "minor",
+    "typo",
+    "spelling",
+    "misspelling",
+    "grammar",
+    "grammatical",
+    "punctuation",
+    "formatting",
+    "layout",
+    "line spacing",
+    "spacing",
+    "alignment",
+    "template",
+    "watermark",
+    "superscript",
+    "decimal point",
+    "row alignment",
+    "proofreading",
+    "data entry",
+    "amateur",
+    "poor quality",
+    "low quality",
+    "print quality",
+    "compression",
+    "scanner",
+    "pdf conversion",
+    "copy editing",
+    "ejaan",
+    "pengetikan",
+    "format",
+    "susun atur",
+    "imbasan",
+    "kesalahan kecil",
+    "tatabahasa",
+    "pemindaian",
+    "kualitas rendering",
+    "การสะกด",
+    "การพิมพ์",
+    "รูปแบบ",
+    "การจัดวาง",
+    "ช่องว่าง",
+    "ตัวอักษร",
+    "สแกน",
+    "تنسيق",
+    "إملائية",
+    "لغوية",
+    "مسح",
+    "خط",
+    "ترميز",
+    "عرض النص",
+    "排版",
+    "格式",
+    "掃描",
+    "扫描",
+    "字形",
+    "渲染",
+    "錯別字",
+    "错别字",
+    "筆誤",
+    "笔误",
+    "標點",
+    "标点",
+    "校對",
+    "校对",
+    "字體",
+    "字体",
+)
+
+STRONG_TAMPER_TERMS = (
+    "redaction",
+    "redacted",
+    "black block",
+    "black box",
+    "obscur",
+    "obscured",
+    "obscures",
+    "blur",
+    "blurred",
+    "smudge",
+    "smeared",
+    "mask",
+    "covered",
+    "covering",
+    "hide",
+    "hidden",
+    "erased",
+    "deleted",
+    "overwritten",
+    "copy-paste",
+    "copy paste",
+    "copy_move",
+    "copy-move",
+    "paste boundary",
+    "seam",
+    "splicing",
+    "splice",
+    "tampered region",
+    "manipulated region",
+    "altered total",
+    "math error",
+    "calculation",
+    "sum",
+    "subtotal",
+    "inconsistent total",
+    "impossible date",
+    "timeline",
+    "identity conflict",
+    "entity conflict",
+    "qr code",
+    "logo conflict",
+    "anachronism",
+    "critical field",
+    "critical text",
+    "table value",
+    "number mismatch",
+    "date mismatch",
+    "name mismatch",
+    "amount mismatch",
+    "sensor",
+    "redaksi",
+    "blok hitam",
+    "kabur",
+    "buram",
+    "ditutup",
+    "dipadam",
+    "jumlah",
+    "tarikh",
+    "nombor",
+    "nama",
+    "percanggahan",
+    "เบลอ",
+    "ปิดทับ",
+    "ลบ",
+    "จำนวนเงิน",
+    "วันที่",
+    "ชื่อ",
+    "ขัดแย้ง",
+    "حجب",
+    "محجوب",
+    "طمس",
+    "تعديل",
+    "محو",
+    "التاريخ",
+    "المبلغ",
+    "الاسم",
+    "تناقض",
+    "遮挡",
+    "遮蔽",
+    "涂黑",
+    "模糊",
+    "抹除",
+    "刪除",
+    "删除",
+    "篡改",
+    "拼接",
+    "邊界",
+    "边界",
+    "金額",
+    "金额",
+    "日期",
+    "姓名",
+    "數字",
+    "数字",
+    "矛盾",
+    "不一致",
+    "錯誤計算",
+    "错误计算",
+)
 
 
 def parse_json_object(raw: str) -> tuple[dict[str, Any], str | None]:
@@ -265,6 +448,55 @@ def scale_grounding_boxes_in_report(report: str, width: int, height: int, scale_
         return f"[GROUNDING]:{scaled}"
 
     return GROUNDING_BOX_RE.sub(replace, report)
+
+
+def count_term_hits(text: str, terms: tuple[str, ...]) -> int:
+    lowered = text.lower()
+    return sum(1 for term in terms if term.lower() in lowered)
+
+
+def benign_error_review_report(
+    report: str,
+    ocr_layout: dict[str, Any],
+    *,
+    enabled: bool,
+    max_risk: int,
+    min_benign_hits: int,
+    max_strong_hits: int,
+    max_anomalies: int,
+) -> tuple[str, dict[str, Any]]:
+    parsed = parse_cct_report(report)
+    anomaly_count = len(ANOMALY_HEADING_RE.findall(report or ""))
+    try:
+        risk_score = int(parsed.get("risk_score") or 0)
+    except (TypeError, ValueError):
+        risk_score = 0
+    benign_hits = count_term_hits(report or "", BENIGN_ERROR_TERMS)
+    strong_hits = count_term_hits(report or "", STRONG_TAMPER_TERMS)
+    should_downgrade = (
+        enabled
+        and parsed.get("conclusion") == "FORGED"
+        and risk_score <= max_risk
+        and anomaly_count <= max_anomalies
+        and benign_hits >= min_benign_hits
+        and strong_hits <= max_strong_hits
+    )
+    meta = {
+        "enabled": enabled,
+        "decision": "AUTHENTIC" if should_downgrade else parsed.get("conclusion", "UNKNOWN"),
+        "applied": should_downgrade,
+        "risk_score": risk_score,
+        "anomaly_count": anomaly_count,
+        "benign_hits": benign_hits,
+        "strong_hits": strong_hits,
+        "policy": (
+            "Downgrade only single/low-complexity forged reports whose explanation is dominated "
+            "by benign OCR, scan, typography, formatting, or production-error cues."
+        ),
+    }
+    if not should_downgrade:
+        return report, meta
+    return ensure_report_structure(authentic_downgrade_report(ocr_layout)), meta
 
 
 def union_boxes(boxes: list[list[int]]) -> list[int] | None:
@@ -598,6 +830,11 @@ def process_row(
     ocr_model: str | None,
     grounding_box_scale_x: float,
     grounding_box_scale_y: float,
+    benign_reviewer_enabled: bool,
+    benign_reviewer_max_risk: int,
+    benign_reviewer_min_hits: int,
+    benign_reviewer_max_strong_hits: int,
+    benign_reviewer_max_anomalies: int,
 ) -> dict[str, Any]:
     sample_id = row.get("sample_id")
     image_name = row.get("image_file") or Path(str(row.get("image_path") or "")).name
@@ -710,6 +947,16 @@ def process_row(
         ):
             final_report = ensure_report_structure(authentic_downgrade_report(ocr_layout or {}))
             parsed_report = parse_cct_report(final_report)
+        final_report, benign_review = benign_error_review_report(
+            final_report,
+            ocr_layout or {},
+            enabled=benign_reviewer_enabled,
+            max_risk=benign_reviewer_max_risk,
+            min_benign_hits=benign_reviewer_min_hits,
+            max_strong_hits=benign_reviewer_max_strong_hits,
+            max_anomalies=benign_reviewer_max_anomalies,
+        )
+        parsed_report = parse_cct_report(final_report)
         if parsed_report.get("conclusion") == "FORGED":
             final_report = scale_grounding_boxes_in_report(
                 final_report,
@@ -728,6 +975,7 @@ def process_row(
             "grounding_box_scale_x": grounding_box_scale_x,
             "grounding_box_scale_y": grounding_box_scale_y,
         }
+        stage_outputs["benign_reviewer"] = benign_review
         stage_usages["report"] = usage
 
         return {
@@ -803,6 +1051,11 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--grounding-box-scale-x", type=float, default=3.5)
     p.add_argument("--grounding-box-scale-y", type=float, default=4.0)
+    p.add_argument("--disable-benign-reviewer", action="store_true")
+    p.add_argument("--benign-reviewer-max-risk", type=int, default=95)
+    p.add_argument("--benign-reviewer-min-hits", type=int, default=1)
+    p.add_argument("--benign-reviewer-max-strong-hits", type=int, default=1)
+    p.add_argument("--benign-reviewer-max-anomalies", type=int, default=1)
     return p.parse_args()
 
 
@@ -853,7 +1106,8 @@ def main() -> None:
     print(
         f"[run_staged_docshield_api] model={args.model} rows={len(filtered)} "
         f"ocr_model={args.ocr_model or 'same'} workers={args.num_workers} thinking={args.enable_thinking} "
-        f"default_threshold={args.forged_risk_threshold} lang_thresholds={language_risk_thresholds}"
+        f"default_threshold={args.forged_risk_threshold} lang_thresholds={language_risk_thresholds} "
+        f"benign_reviewer={not args.disable_benign_reviewer}"
     )
     mode = "a" if args.resume and out_path.exists() else "w"
     written = 0
@@ -873,6 +1127,11 @@ def main() -> None:
         "ocr_model": args.ocr_model or None,
         "grounding_box_scale_x": args.grounding_box_scale_x,
         "grounding_box_scale_y": args.grounding_box_scale_y,
+        "benign_reviewer_enabled": not args.disable_benign_reviewer,
+        "benign_reviewer_max_risk": args.benign_reviewer_max_risk,
+        "benign_reviewer_min_hits": args.benign_reviewer_min_hits,
+        "benign_reviewer_max_strong_hits": args.benign_reviewer_max_strong_hits,
+        "benign_reviewer_max_anomalies": args.benign_reviewer_max_anomalies,
     }
 
     if args.num_workers <= 1:
