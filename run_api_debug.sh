@@ -27,6 +27,7 @@ else
   RAW_JSONL="${OUTPUT_JSONL:-outputs/raw/staged_docshield_api_val_${TAG}.jsonl}"
   "$PYTHON_BIN" baselines/DocShield/run_staged_docshield_api.py \
     --model "${MODEL:-qwen3.6-35b-a3b}" \
+    --ocr-model "${OCR_MODEL:-}" \
     --input-jsonl data/val_300.jsonl \
     --output-jsonl "$RAW_JSONL" \
     --api-key-file "${API_KEY_FILE:-/Users/penpen/Desktop/api-key.txt}" \
@@ -35,5 +36,7 @@ else
     --num-workers "${NUM_WORKERS:-1}" \
     --forged-risk-threshold "${FORGED_RISK_THRESHOLD:-80}" \
     --forged-risk-thresholds "${FORGED_RISK_THRESHOLDS:-ar=70,id=75}" \
+    --grounding-box-scale-x "${GROUNDING_BOX_SCALE_X:-3.5}" \
+    --grounding-box-scale-y "${GROUNDING_BOX_SCALE_Y:-4.0}" \
     --resume
 fi

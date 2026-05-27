@@ -98,6 +98,8 @@ MAX_SAMPLES=3 ./run_api_debug.sh
 - API key：`/Users/penpen/Desktop/api-key.txt`
 - forged 默认风险阈值：`80`，可用 `FORGED_RISK_THRESHOLD` 覆盖
 - Stage-1 语言感知风险阈值：`ar=70,id=75`，可用 `FORGED_RISK_THRESHOLDS` 覆盖；空字符串表示只使用默认阈值
+- Stage-1 OCR 模型：默认和主模型相同；如果百炼已开通 Qwen-OCR，可设置 `OCR_MODEL=qwen-vl-ocr-latest`
+- grounding box 扩张：默认 `GROUNDING_BOX_SCALE_X=3.5`、`GROUNDING_BOX_SCALE_Y=4.0`，用于把模型偏紧的异常中心框扩展到更接近文本区域的定位框
 
 推理结果会写到：
 
@@ -119,7 +121,7 @@ outputs/raw/staged_docshield_api_val_60.jsonl
 4. Spatial grounding
 5. Report synthesis
 
-最终报告会做两个确定性后处理：补齐评测需要的报告结构标记；当模型判为 `FORGED` 但 `RISK_SCORE` 低于当前语言对应阈值时降级为 `AUTHENTIC`，用于降低低置信假阳性。默认语言阈值来自 Stage 1 检测出的文档语言，不读取 GT 语言或标签。
+最终报告会做三个确定性后处理：补齐评测需要的报告结构标记；当模型判为 `FORGED` 但 `RISK_SCORE` 低于当前语言对应阈值时降级为 `AUTHENTIC`，用于降低低置信假阳性；对保留的 forged grounding box 做 GT-blind 扩张，缓解模型输出框偏紧、mask 覆盖不足的问题。默认语言阈值和 box 扩张都不读取 GT 语言、标签、mask 或报告文本。
 
 如果需要回退到旧的单 prompt CCT baseline：
 

@@ -176,6 +176,7 @@ def call_api(
 
 
 JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+GROUNDING_BOX_RE = re.compile(r"\[GROUNDING\]\s*:\s*\[([^\[\]]+)\]", re.IGNORECASE)
 
 
 def parse_json_object(raw: str) -> tuple[dict[str, Any], str | None]:
@@ -213,6 +214,57 @@ def normalize_bbox(value: Any, width: int, height: int) -> list[int] | None:
     if x2 <= x1 or y2 <= y1:
         return None
     return [x1, y1, x2, y2]
+
+
+def scale_bbox(box: list[float], width: int, height: int, scale_x: float, scale_y: float) -> list[int] | None:
+    if len(box) != 4:
+        return None
+    try:
+        x1, y1, x2, y2 = [float(v) for v in box]
+    except (TypeError, ValueError):
+        return None
+    x1, x2 = sorted((x1, x2))
+    y1, y2 = sorted((y1, y2))
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    box_w = max(1.0, x2 - x1) * max(0.01, scale_x)
+    box_h = max(1.0, y2 - y1) * max(0.01, scale_y)
+    scaled = [
+        max(0, min(width, int(round(cx - box_w / 2.0)))),
+        max(0, min(height, int(round(cy - box_h / 2.0)))),
+        max(0, min(width, int(round(cx + box_w / 2.0)))),
+        max(0, min(height, int(round(cy + box_h / 2.0)))),
+    ]
+    if scaled[2] <= scaled[0] or scaled[3] <= scaled[1]:
+        return None
+    return scaled
+
+
+def scale_grounding_boxes_in_report(report: str, width: int, height: int, scale_x: float, scale_y: float) -> str:
+    """Expand or shrink final report boxes without changing model-visible evidence.
+
+    The local validation masks reward broader text-region coverage than the
+    current VLM's tight center boxes. This postprocess is intentionally applied
+    only after report synthesis and never reads GT.
+    """
+
+    if not report or (scale_x == 1.0 and scale_y == 1.0):
+        return report
+
+    def replace(match: re.Match[str]) -> str:
+        nums = re.findall(r"-?\d+(?:\.\d+)?", match.group(1))
+        if len(nums) < 4:
+            return match.group(0)
+        try:
+            box = [float(v) for v in nums[:4]]
+        except ValueError:
+            return match.group(0)
+        scaled = scale_bbox(box, width, height, scale_x, scale_y)
+        if not scaled:
+            return match.group(0)
+        return f"[GROUNDING]:{scaled}"
+
+    return GROUNDING_BOX_RE.sub(replace, report)
 
 
 def union_boxes(boxes: list[list[int]]) -> list[int] | None:
@@ -543,6 +595,9 @@ def process_row(
     timeout: int,
     forged_risk_threshold: int,
     language_risk_thresholds: dict[str, int],
+    ocr_model: str | None,
+    grounding_box_scale_x: float,
+    grounding_box_scale_y: float,
 ) -> dict[str, Any]:
     sample_id = row.get("sample_id")
     image_name = row.get("image_file") or Path(str(row.get("image_path") or "")).name
@@ -562,14 +617,14 @@ def process_row(
             stage_name="ocr_layout",
             prompt=ocr_layout_prompt(str(image_name), width, height),
             image_path=image_path,
-            model=model,
+            model=ocr_model or model,
             api_key=api_key,
             max_tokens=max_tokens,
             temperature=temperature,
             enable_thinking=enable_thinking,
             timeout=timeout,
         )
-        stage_outputs["ocr_layout"] = {"raw": ocr_raw, "parsed": ocr_layout}
+        stage_outputs["ocr_layout"] = {"raw": ocr_raw, "parsed": ocr_layout, "model": ocr_model or model}
         stage_usages["ocr_layout"] = usage
 
         evidence_raw, usage, evidence = run_stage(
@@ -655,12 +710,23 @@ def process_row(
         ):
             final_report = ensure_report_structure(authentic_downgrade_report(ocr_layout or {}))
             parsed_report = parse_cct_report(final_report)
+        if parsed_report.get("conclusion") == "FORGED":
+            final_report = scale_grounding_boxes_in_report(
+                final_report,
+                width,
+                height,
+                grounding_box_scale_x,
+                grounding_box_scale_y,
+            )
+            parsed_report = parse_cct_report(final_report)
 
         stage_outputs["report"] = {"raw": report_raw}
         stage_outputs["postprocess"] = {
             "document_language": document_language,
             "forged_risk_threshold": applied_risk_threshold,
             "language_risk_thresholds": language_risk_thresholds,
+            "grounding_box_scale_x": grounding_box_scale_x,
+            "grounding_box_scale_y": grounding_box_scale_y,
         }
         stage_usages["report"] = usage
 
@@ -713,6 +779,11 @@ def load_api_key(path: str) -> str:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", default="qwen3.6-35b-a3b")
+    p.add_argument(
+        "--ocr-model",
+        default="",
+        help="Optional model for Stage 1 OCR/Layout only, e.g. qwen-vl-ocr-latest when access is enabled.",
+    )
     p.add_argument("--input-jsonl", default="data/val_300.jsonl")
     p.add_argument("--output-jsonl", default="outputs/raw/staged_docshield_api_val_60.jsonl")
     p.add_argument("--api-key-file", default="/Users/penpen/Desktop/api-key.txt")
@@ -730,6 +801,8 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated Stage-1 document-language thresholds, e.g. ar=70,id=75. "
         "Unset to use only --forged-risk-threshold.",
     )
+    p.add_argument("--grounding-box-scale-x", type=float, default=3.5)
+    p.add_argument("--grounding-box-scale-y", type=float, default=4.0)
     return p.parse_args()
 
 
@@ -779,7 +852,7 @@ def main() -> None:
 
     print(
         f"[run_staged_docshield_api] model={args.model} rows={len(filtered)} "
-        f"workers={args.num_workers} thinking={args.enable_thinking} "
+        f"ocr_model={args.ocr_model or 'same'} workers={args.num_workers} thinking={args.enable_thinking} "
         f"default_threshold={args.forged_risk_threshold} lang_thresholds={language_risk_thresholds}"
     )
     mode = "a" if args.resume and out_path.exists() else "w"
@@ -797,6 +870,9 @@ def main() -> None:
         "timeout": args.timeout,
         "forged_risk_threshold": args.forged_risk_threshold,
         "language_risk_thresholds": language_risk_thresholds,
+        "ocr_model": args.ocr_model or None,
+        "grounding_box_scale_x": args.grounding_box_scale_x,
+        "grounding_box_scale_y": args.grounding_box_scale_y,
     }
 
     if args.num_workers <= 1:
