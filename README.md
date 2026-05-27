@@ -119,6 +119,18 @@ OCR 使用规则见 `docs/ocr_usage_rules.md`。预热 OCR cache：
   --num-workers 8
 ```
 
+如果要检查 Qwen-OCR 的坐标质量，单独预热 layout cache。这个 cache 只保存 OCR 文本框，不读取 label、GT report、mask，也不做逻辑推理：
+
+```bash
+.venv/bin/python baselines/DocShield/cache_ocr_layouts.py \
+  --input-jsonl data/val_300.jsonl \
+  --model qwen-vl-ocr \
+  --api-key-file /Users/penpen/Desktop/api-key.txt \
+  --num-workers 8
+```
+
+Qwen-OCR 实测有时会返回 `[center_x, center_y, size_a, size_b, angle]` 形式的 5 元组，并且 `angle=90` 时宽高语义需要交换；脚本会先转换成原图像素 `xyxy` 后再给 viewer 使用。若模型省略文字字段，layout cache 仍保留坐标，正文文本以 transcript cache 为准。
+
 使用已缓存 OCR transcript 跑 staged pipeline：
 
 ```bash
@@ -136,11 +148,12 @@ python3 scripts/build_ocr_viewer_data.py \
   --raw-jsonl v13-box-graft=outputs/raw/staged_cct_v13_ocr_boxes_on_v9_60.jsonl \
   --gt-jsonl data/val_300.jsonl \
   --cache-model qwen-vl-ocr \
+  --ocr-layout-model qwen-vl-ocr \
   --output outputs/ocr_viewer/data.json
 python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
-然后打开 `http://127.0.0.1:8765/tools/ocr_viewer/`。该页面会把模型常见的 `0-1000` OCR/Layout 坐标投影到原图像素坐标；GT report boxes 和 mask 只作为本地诊断 overlay，不会进入模型 prompt。
+然后打开 `http://127.0.0.1:8765/tools/ocr_viewer/`。页面中的 `Qwen OCR` 是独立 OCR layout cache；`VLM layout` 是 staged Stage-1 输出，不再混称为 OCR。该页面会把模型常见的 `0-1000` OCR/Layout 坐标投影到原图像素坐标；GT report boxes 和 mask 只作为本地诊断 overlay，不会进入模型 prompt。
 
 推理结果会写到：
 

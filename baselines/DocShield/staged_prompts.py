@@ -68,6 +68,39 @@ is forged.
 """
 
 
+def ocr_layout_only_prompt(image_name: str, width: int, height: int) -> str:
+    return f"""OCR layout extraction only.
+
+Image: {image_name}
+Native image size: width={width}, height={height}.
+
+Return ONLY valid JSON with this schema:
+{{
+  "coordinate_system": "native_pixel",
+  "box_format": "cxcy_size_angle",
+  "text_lines": [
+    ["one physical text line only", center_x, center_y, size_a, size_b, rotation_angle]
+  ]
+}}
+
+Rules:
+- This is an OCR task only. Do not analyze authenticity or forgery.
+- Do not wrap the JSON in markdown fences.
+- Preserve the document's original language and reading order.
+- Use native image pixel coordinates whenever possible.
+- Every text_lines item must have exactly 6 elements: text, center_x,
+  center_y, size_a, size_b, rotation_angle.
+- Do not output numeric-only text_lines items. If text is unreadable, use an
+  empty string as the first element.
+- Do not merge multiple physical lines into one item, even when they belong to
+  the same paragraph.
+- Do not include newline characters inside a text item.
+- For horizontal lines, use rotation_angle=0 and size_a=box_width,
+  size_b=box_height. For vertical/rotated lines, use the OCR model's native
+  rotation angle and dimensions.
+"""
+
+
 def ocr_layout_prompt(
     image_name: str,
     width: int,

@@ -16,6 +16,7 @@
       --amber: #c47a00;
       --green: #168056;
       --violet: #8a46c8;
+      --cyan: #008199;
     }
     * { box-sizing: border-box; }
     body {
@@ -168,6 +169,8 @@
     }
     .ocr rect { stroke: var(--blue); fill: var(--blue); }
     .ocr text { fill: var(--blue); }
+    .qwen rect { stroke: var(--cyan); fill: var(--cyan); }
+    .qwen text { fill: var(--cyan); }
     .ground rect { stroke: var(--red); fill: var(--red); }
     .ground text { fill: var(--red); }
     .final rect { stroke: var(--amber); fill: var(--amber); }
@@ -279,7 +282,8 @@
     <section class="stage">
       <div class="toolbar">
         <div class="toggles">
-          <button id="toggleOcr" class="active">OCR boxes</button>
+          <button id="toggleQwen" class="active">Qwen OCR</button>
+          <button id="toggleOcr">VLM layout</button>
           <button id="toggleGround" class="active">Pred boxes</button>
           <button id="toggleFinal">Final boxes</button>
           <button id="toggleGt" class="active">GT boxes</button>
@@ -311,7 +315,7 @@
           <div id="transcript" class="text-box"></div>
         </div>
         <div>
-          <h2>OCR/Layout Spans</h2>
+          <h2>VLM Layout Spans</h2>
           <table>
             <thead><tr><th>ID</th><th>Box</th><th>Text</th></tr></thead>
             <tbody id="spanTable"></tbody>
@@ -326,7 +330,8 @@
       sourceLabel: "",
       sampleId: "",
       selectedKey: "",
-      showOcr: true,
+      showOcr: false,
+      showQwen: true,
       showGround: true,
       showFinal: false,
       showGt: true,
@@ -395,7 +400,7 @@
         const verdict = s.verdict || "UNKNOWN";
         return `<button class="sample-row${active}" data-id="${id}">
           <span class="sample-id">${id}</span>
-          <span class="sample-meta">${escapeHtml(verdict)} · ${s.ocr_spans.length} OCR · ${s.grounding_boxes.length} pred · ${s.gt_boxes.length} GT</span>
+          <span class="sample-meta">${escapeHtml(verdict)} · ${s.qwen_ocr_spans.length} qOCR · ${s.ocr_spans.length} VLM · ${s.grounding_boxes.length} pred · ${s.gt_boxes.length} GT</span>
         </button>`;
       }).join("");
       sampleList.querySelectorAll(".sample-row").forEach((btn) => {
@@ -423,6 +428,9 @@
 
     function allRegions(s) {
       const regions = [];
+      if (state.showQwen) {
+        s.qwen_ocr_spans.forEach((r) => regions.push({...r, kind: "qwen"}));
+      }
       if (state.showOcr) {
         s.ocr_spans.forEach((r) => regions.push({...r, kind: "ocr"}));
       }
@@ -502,7 +510,7 @@
           drawOverlay();
         });
       });
-      el("imageMeta").textContent = `${s.ocr_spans.length} OCR · ${s.grounding_boxes.length} pred · ${s.final_grounding_boxes.length} final · ${s.gt_boxes.length} GT · ${s.invalid_spans} invalid`;
+      el("imageMeta").textContent = `${s.qwen_ocr_spans.length} Qwen OCR · ${s.ocr_spans.length} VLM layout · ${s.grounding_boxes.length} pred · ${s.final_grounding_boxes.length} final · ${s.gt_boxes.length} GT · ${s.invalid_spans} invalid`;
       if (s.gt_mask_url && state.showMask) {
         maskImage.src = s.gt_mask_url;
         maskImage.style.display = "block";
@@ -539,6 +547,12 @@
     el("toggleOcr").addEventListener("click", () => {
       state.showOcr = !state.showOcr;
       el("toggleOcr").classList.toggle("active", state.showOcr);
+      state.selectedKey = "";
+      render();
+    });
+    el("toggleQwen").addEventListener("click", () => {
+      state.showQwen = !state.showQwen;
+      el("toggleQwen").classList.toggle("active", state.showQwen);
       state.selectedKey = "";
       render();
     });
