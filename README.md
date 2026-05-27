@@ -96,7 +96,8 @@ MAX_SAMPLES=3 ./run_api_debug.sh
 - 最大输出：`8192` tokens
 - 样本数：`60`
 - API key：`/Users/penpen/Desktop/api-key.txt`
-- forged 风险阈值：`80`，可用 `FORGED_RISK_THRESHOLD` 覆盖
+- forged 默认风险阈值：`80`，可用 `FORGED_RISK_THRESHOLD` 覆盖
+- Stage-1 语言感知风险阈值：`ar=70,id=75`，可用 `FORGED_RISK_THRESHOLDS` 覆盖；空字符串表示只使用默认阈值
 
 推理结果会写到：
 
@@ -118,7 +119,7 @@ outputs/raw/staged_docshield_api_val_60.jsonl
 4. Spatial grounding
 5. Report synthesis
 
-最终报告会做两个确定性后处理：补齐评测需要的报告结构标记；当模型判为 `FORGED` 但 `RISK_SCORE < FORGED_RISK_THRESHOLD` 时降级为 `AUTHENTIC`，用于降低低置信假阳性。
+最终报告会做两个确定性后处理：补齐评测需要的报告结构标记；当模型判为 `FORGED` 但 `RISK_SCORE` 低于当前语言对应阈值时降级为 `AUTHENTIC`，用于降低低置信假阳性。默认语言阈值来自 Stage 1 检测出的文档语言，不读取 GT 语言或标签。
 
 如果需要回退到旧的单 prompt CCT baseline：
 

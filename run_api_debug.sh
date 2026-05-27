@@ -34,5 +34,6 @@ else
     --max-samples "$MAX_SAMPLES" \
     --num-workers "${NUM_WORKERS:-1}" \
     --forged-risk-threshold "${FORGED_RISK_THRESHOLD:-80}" \
+    --forged-risk-thresholds "${FORGED_RISK_THRESHOLDS:-ar=70,id=75}" \
     --resume
 fi

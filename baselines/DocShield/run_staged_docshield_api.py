@@ -46,6 +46,7 @@ from staged_prompts import (  # noqa: E402
 
 BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 GT_ONLY_FIELDS = {"label", "label_codalab", "report_text", "report_path", "mask_path", "has_mask"}
+DEFAULT_LANGUAGE_RISK_THRESHOLDS = {"ar": 70, "id": 75}
 
 
 def resolve_repo_path(path: str | Path) -> Path:
@@ -224,6 +225,66 @@ def union_boxes(boxes: list[list[int]]) -> list[int] | None:
         max(b[2] for b in boxes),
         max(b[3] for b in boxes),
     ]
+
+
+def normalize_document_language(value: Any) -> str:
+    language = str(value or "unknown").strip().lower()
+    if not language:
+        return "unknown"
+    if language.startswith("zh"):
+        return "zh"
+    if language.startswith("ar"):
+        return "ar"
+    if language.startswith("th"):
+        return "th"
+    if language.startswith("id"):
+        return "id"
+    if language.startswith("ms"):
+        return "ms"
+    if language.startswith("en"):
+        return "en"
+    return language.split("-", 1)[0].split("_", 1)[0] or "unknown"
+
+
+def parse_language_thresholds(raw: str | None) -> dict[str, int]:
+    """Parse comma-separated language-specific risk thresholds.
+
+    Example: ``ar=70,id=75``. Values outside [0, 100] are rejected so a typo
+    cannot silently flip low-confidence forged reports.
+    """
+
+    if raw is None:
+        return dict(DEFAULT_LANGUAGE_RISK_THRESHOLDS)
+    text = raw.strip()
+    if not text:
+        return {}
+
+    thresholds: dict[str, int] = {}
+    for item in text.split(","):
+        part = item.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise ValueError(f"Invalid language threshold {part!r}; expected LANG=INT")
+        lang, value = part.split("=", 1)
+        lang = normalize_document_language(lang)
+        try:
+            threshold = int(value)
+        except ValueError as exc:
+            raise ValueError(f"Invalid threshold for {lang!r}: {value!r}") from exc
+        if threshold < 0 or threshold > 100:
+            raise ValueError(f"Threshold for {lang!r} must be between 0 and 100: {threshold}")
+        thresholds[lang] = threshold
+    return thresholds
+
+
+def forged_threshold_for_language(
+    ocr_layout: dict[str, Any] | None,
+    default_threshold: int,
+    language_thresholds: dict[str, int],
+) -> tuple[int, str]:
+    language = normalize_document_language((ocr_layout or {}).get("document_language"))
+    return language_thresholds.get(language, default_threshold), language
 
 
 def collect_spans(ocr_layout: dict[str, Any], width: int, height: int) -> dict[str, list[int]]:
@@ -481,6 +542,7 @@ def process_row(
     enable_thinking: bool,
     timeout: int,
     forged_risk_threshold: int,
+    language_risk_thresholds: dict[str, int],
 ) -> dict[str, Any]:
     sample_id = row.get("sample_id")
     image_name = row.get("image_file") or Path(str(row.get("image_path") or "")).name
@@ -578,18 +640,28 @@ def process_row(
         )
         final_report = ensure_report_structure(report_raw)
         parsed_report = parse_cct_report(final_report)
+        applied_risk_threshold, document_language = forged_threshold_for_language(
+            ocr_layout,
+            forged_risk_threshold,
+            language_risk_thresholds,
+        )
         if parsed_report.get("conclusion") == "UNKNOWN":
             final_report = ensure_report_structure(fallback_report(ocr_layout or {}, normalized_validation))
             parsed_report = parse_cct_report(final_report)
         if (
             parsed_report.get("conclusion") == "FORGED"
             and parsed_report.get("risk_score") is not None
-            and int(parsed_report.get("risk_score") or 0) < forged_risk_threshold
+            and int(parsed_report.get("risk_score") or 0) < applied_risk_threshold
         ):
             final_report = ensure_report_structure(authentic_downgrade_report(ocr_layout or {}))
             parsed_report = parse_cct_report(final_report)
 
         stage_outputs["report"] = {"raw": report_raw}
+        stage_outputs["postprocess"] = {
+            "document_language": document_language,
+            "forged_risk_threshold": applied_risk_threshold,
+            "language_risk_thresholds": language_risk_thresholds,
+        }
         stage_usages["report"] = usage
 
         return {
@@ -652,6 +724,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--resume", action="store_true")
     p.add_argument("--timeout", type=int, default=180)
     p.add_argument("--forged-risk-threshold", type=int, default=80)
+    p.add_argument(
+        "--forged-risk-thresholds",
+        default="ar=70,id=75",
+        help="Comma-separated Stage-1 document-language thresholds, e.g. ar=70,id=75. "
+        "Unset to use only --forged-risk-threshold.",
+    )
     return p.parse_args()
 
 
@@ -660,6 +738,10 @@ def main() -> None:
     input_jsonl = resolve_repo_path(args.input_jsonl)
     ensure_data_available(input_jsonl)
     api_key = load_api_key(args.api_key_file)
+    try:
+        language_risk_thresholds = parse_language_thresholds(args.forged_risk_thresholds)
+    except ValueError as exc:
+        raise SystemExit(f"Error: {exc}") from exc
 
     rows = read_jsonl(input_jsonl)
     if args.max_samples > 0:
@@ -697,7 +779,8 @@ def main() -> None:
 
     print(
         f"[run_staged_docshield_api] model={args.model} rows={len(filtered)} "
-        f"workers={args.num_workers} thinking={args.enable_thinking}"
+        f"workers={args.num_workers} thinking={args.enable_thinking} "
+        f"default_threshold={args.forged_risk_threshold} lang_thresholds={language_risk_thresholds}"
     )
     mode = "a" if args.resume and out_path.exists() else "w"
     written = 0
@@ -713,6 +796,7 @@ def main() -> None:
         "enable_thinking": args.enable_thinking,
         "timeout": args.timeout,
         "forged_risk_threshold": args.forged_risk_threshold,
+        "language_risk_thresholds": language_risk_thresholds,
     }
 
     if args.num_workers <= 1:
