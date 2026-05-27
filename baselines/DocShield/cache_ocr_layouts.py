@@ -8,10 +8,13 @@ not read labels, GT reports, masks, or other evaluation-only fields.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import mimetypes
 import re
 import sys
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -34,12 +37,25 @@ from run_staged_docshield_api import (  # noqa: E402
 from staged_prompts import ocr_layout_only_prompt  # noqa: E402
 
 
+DASHSCOPE_NATIVE_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--input-jsonl", default="data/val_300.jsonl")
     p.add_argument("--model", default="qwen-vl-ocr")
     p.add_argument("--api-key-file", default="/Users/penpen/Desktop/api-key.txt")
     p.add_argument("--cache-dir", default="outputs/cache/ocr_layouts")
+    p.add_argument(
+        "--api-mode",
+        choices=["openai-prompt", "dashscope-native"],
+        default="openai-prompt",
+        help="Use prompt-based OpenAI-compatible OCR, or DashScope native OCR options.",
+    )
+    p.add_argument("--ocr-task", default="advanced_recognition", help="DashScope native OCR task.")
+    p.add_argument("--min-pixels", type=int, default=32 * 32 * 3)
+    p.add_argument("--max-pixels", type=int, default=32 * 32 * 8192)
+    p.add_argument("--enable-rotate", action="store_true")
     p.add_argument("--sample-id", action="append", default=[], help="Only cache matching sample_id values.")
     p.add_argument("--max-samples", type=int, default=0, help="0 = all rows after filtering.")
     p.add_argument("--num-workers", type=int, default=1)
@@ -59,6 +75,11 @@ def image_name_for_row(row: dict[str, Any]) -> str:
 
 def layout_cache_path(cache_dir: Path, model: str, key: str) -> Path:
     return cache_dir / safe_cache_name(model) / f"{safe_cache_name(key)}.json"
+
+
+def image_to_data_url(path: Path) -> str:
+    mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+    return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
 
 def clamp_box(box: list[float], width: int, height: int) -> list[int] | None:
@@ -184,12 +205,109 @@ def parse_ocr_layout(raw: str, width: int, height: int) -> dict[str, Any]:
     }
 
 
+def box_from_location(location: Any, width: int, height: int) -> list[int] | None:
+    nums = numbers_from_value(location)
+    if len(nums) < 8:
+        return None
+    xs = nums[0::2][:4]
+    ys = nums[1::2][:4]
+    return clamp_box([min(xs), min(ys), max(xs), max(ys)], width, height)
+
+
+def parse_native_ocr_result(result: dict[str, Any], width: int, height: int) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    choice = ((result.get("output") or {}).get("choices") or [{}])[0]
+    content = ((choice.get("message") or {}).get("content") or [{}])[0]
+    raw = str(content.get("text") or "")
+    ocr_result = content.get("ocr_result") or {}
+    words_info = ocr_result.get("words_info") or []
+    spans: list[dict[str, Any]] = []
+    if isinstance(words_info, list):
+        for idx, item in enumerate(words_info, start=1):
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "")
+            box = box_from_location(item.get("location"), width, height)
+            detected_format = "location"
+            if not box:
+                nums = numbers_from_value(item.get("rotate_rect"))[:5]
+                if len(nums) >= 4:
+                    box, detected_format = convert_numbers(nums, width, height, "rotate_rect")
+            if not box:
+                continue
+            spans.append(
+                {
+                    "id": f"q{idx}",
+                    "text": text,
+                    "bbox": box,
+                    "detected_box_format": detected_format,
+                    "confidence": None,
+                    "location": item.get("location"),
+                    "rotate_rect": item.get("rotate_rect"),
+                }
+            )
+    parsed = {
+        "coordinate_system": "native_pixel",
+        "box_format": "location_or_rotate_rect",
+        "text_spans": spans,
+        "raw_line_count": len(words_info) if isinstance(words_info, list) else 0,
+        "_parse_error": None,
+    }
+    usage = result.get("usage") or {}
+    return raw, parsed, usage
+
+
+def call_dashscope_native_ocr(
+    *,
+    image_path: Path,
+    model: str,
+    api_key: str,
+    ocr_task: str,
+    min_pixels: int,
+    max_pixels: int,
+    enable_rotate: bool,
+    timeout: int,
+) -> dict[str, Any]:
+    payload = {
+        "model": model,
+        "input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "image": image_to_data_url(image_path),
+                            "min_pixels": min_pixels,
+                            "max_pixels": max_pixels,
+                            "enable_rotate": enable_rotate,
+                        }
+                    ],
+                }
+            ]
+        },
+        "parameters": {"ocr_options": {"task": ocr_task}},
+    }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        DASHSCOPE_NATIVE_URL,
+        data=data,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def process_row(
     row: dict[str, Any],
     *,
     model: str,
     api_key: str,
     cache_dir: Path,
+    api_mode: str,
+    ocr_task: str,
+    min_pixels: int,
+    max_pixels: int,
+    enable_rotate: bool,
     max_tokens: int,
     timeout: int,
     overwrite: bool,
@@ -206,16 +324,30 @@ def process_row(
     with Image.open(image_path) as im:
         width, height = im.size
 
-    raw, usage = run_text_stage(
-        prompt=ocr_layout_only_prompt(image_name, width, height),
-        image_path=image_path,
-        model=model,
-        api_key=api_key,
-        max_tokens=max_tokens,
-        temperature=0.01,
-        timeout=timeout,
-    )
-    parsed = parse_ocr_layout(raw, width, height)
+    native_response: dict[str, Any] | None = None
+    if api_mode == "dashscope-native":
+        native_response = call_dashscope_native_ocr(
+            image_path=image_path,
+            model=model,
+            api_key=api_key,
+            ocr_task=ocr_task,
+            min_pixels=min_pixels,
+            max_pixels=max_pixels,
+            enable_rotate=enable_rotate,
+            timeout=timeout,
+        )
+        raw, parsed, usage = parse_native_ocr_result(native_response, width, height)
+    else:
+        raw, usage = run_text_stage(
+            prompt=ocr_layout_only_prompt(image_name, width, height),
+            image_path=image_path,
+            model=model,
+            api_key=api_key,
+            max_tokens=max_tokens,
+            temperature=0.01,
+            timeout=timeout,
+        )
+        parsed = parse_ocr_layout(raw, width, height)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(
         json.dumps(
@@ -223,11 +355,14 @@ def process_row(
                 "sample_id": row.get("sample_id"),
                 "image_name": image_name,
                 "model": model,
+                "api_mode": api_mode,
+                "ocr_task": ocr_task if api_mode == "dashscope-native" else "",
                 "width": width,
                 "height": height,
                 "raw": raw,
                 "parsed": parsed,
                 "usage": usage,
+                "native_response": native_response,
                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             },
             ensure_ascii=False,
@@ -256,6 +391,11 @@ def main() -> None:
         "model": args.model,
         "api_key": api_key,
         "cache_dir": cache_dir,
+        "api_mode": args.api_mode,
+        "ocr_task": args.ocr_task,
+        "min_pixels": args.min_pixels,
+        "max_pixels": args.max_pixels,
+        "enable_rotate": args.enable_rotate,
         "max_tokens": args.max_tokens,
         "timeout": args.timeout,
         "overwrite": args.overwrite,

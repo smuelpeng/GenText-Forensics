@@ -12,11 +12,15 @@ DocShield/CCT baseline.
 - `qwen-vl-ocr-latest` and dated OCR model IDs may still return
   `Model.AccessDenied`; do not use them in default commands unless access is
   re-verified.
-- For transcript-only OCR cache, `qwen-vl-ocr` remains the cheaper/faster first
-  choice. For line-level OCR coordinates used by grounding diagnostics,
-  `qwen3.6-plus` is a candidate model because the May 27 six-sample probe
-  produced more complete text+box rows, but it was slower and should be tested
-  on 60 samples before becoming the default.
+- For Qwen-OCR coordinates, use the DashScope native API with
+  `ocr_options={"task": "advanced_recognition"}`. This returns official
+  `ocr_result.words_info` entries with `text`, quadrilateral `location`, and
+  `rotate_rect` fields.
+- Do not use the prompt-based OpenAI-compatible path as the default for
+  `qwen-vl-ocr` coordinates. Qwen-OCR does not support custom system messages,
+  and prompt-forced JSON can miss the model's built-in OCR task.
+- `qwen3.6-plus` can be used for an ablation when we want a general VLM to
+  produce prompt-shaped OCR JSON, but it is not the default OCR-coordinate path.
 - `OCR_TRANSCRIPT_API_KEY_FILE` exists only as an override for controlled
   ablations. Leave it unset in normal runs.
 
@@ -44,7 +48,8 @@ DocShield/CCT baseline.
   experiments.
 - OCR layout/text-box results should be cached under
   `outputs/cache/ocr_layouts/<model>/` and compared by model before using them
-  for grounding.
+  for grounding. The default coordinate cache command should include
+  `--api-mode dashscope-native --ocr-task advanced_recognition`.
 - Use the online OCR call path only for smoke tests, small ablations, and cache
   misses.
 - For rebuilding all 300 OCR results, prefer a cheaper batch/offline Qwen-OCR

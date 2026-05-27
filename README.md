@@ -125,11 +125,13 @@ OCR 使用规则见 `docs/ocr_usage_rules.md`。预热 OCR cache：
 .venv/bin/python baselines/DocShield/cache_ocr_layouts.py \
   --input-jsonl data/val_300.jsonl \
   --model qwen-vl-ocr \
+  --api-mode dashscope-native \
+  --ocr-task advanced_recognition \
   --api-key-file /Users/penpen/Desktop/api-key.txt \
   --num-workers 8
 ```
 
-Qwen-OCR 实测有时会返回 `[center_x, center_y, size_a, size_b, angle]` 形式的 5 元组，并且 `angle=90` 时宽高语义需要交换；脚本会先转换成原图像素 `xyxy` 后再给 viewer 使用。若模型省略文字字段，layout cache 仍保留坐标，正文文本以 transcript cache 为准。
+Qwen-OCR 坐标应优先使用 DashScope 原生 `advanced_recognition` 任务。该路径会返回官方 `ocr_result.words_info`，包含文字、四点 `location` 和 `rotate_rect`；脚本会转换成原图像素 `xyxy` 后再给 viewer 使用。`openai-prompt` 模式只作为消融和兼容路径，不作为 `qwen-vl-ocr` 坐标默认调用方式。
 
 使用已缓存 OCR transcript 跑 staged pipeline：
 
