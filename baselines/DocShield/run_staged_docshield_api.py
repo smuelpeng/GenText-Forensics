@@ -417,7 +417,7 @@ def write_transcript_cache(cache_path: Path, data: dict[str, Any]) -> None:
     tmp_path.replace(cache_path)
 
 
-def normalize_bbox(value: Any, width: int, height: int) -> list[int] | None:
+def raw_bbox(value: Any) -> list[float] | None:
     if not isinstance(value, list) or len(value) < 4:
         return None
     try:
@@ -426,6 +426,33 @@ def normalize_bbox(value: Any, width: int, height: int) -> list[int] | None:
         return None
     x1, x2 = sorted((x1, x2))
     y1, y2 = sorted((y1, y2))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return [x1, y1, x2, y2]
+
+
+def detect_bbox_space(boxes: list[list[float]], width: int, height: int, *, model_like: bool = False) -> str:
+    """Infer whether model boxes are native pixels or a normalized visual grid."""
+
+    if not boxes:
+        return "pixel"
+    max_x = max(box[2] for box in boxes)
+    max_y = max(box[3] for box in boxes)
+    if max_x <= 1.5 and max_y <= 1.5:
+        return "normalized_0_1"
+    if width > 1200 and height > 1200 and max_x <= 1100 and max_y <= 1100:
+        return "normalized_1000"
+    if model_like and width > 1600 and height > 1600 and max_x <= 1600 and max_y <= 1250:
+        return "normalized_1000"
+    return "pixel"
+
+
+def project_bbox(box: list[float], width: int, height: int, coord_space: str) -> list[int] | None:
+    if coord_space == "normalized_0_1":
+        box = [box[0] * width, box[1] * height, box[2] * width, box[3] * height]
+    elif coord_space == "normalized_1000":
+        box = [box[0] * width / 1000.0, box[1] * height / 1000.0, box[2] * width / 1000.0, box[3] * height / 1000.0]
+    x1, y1, x2, y2 = box
     x1 = max(0, min(width, int(round(x1))))
     x2 = max(0, min(width, int(round(x2))))
     y1 = max(0, min(height, int(round(y1))))
@@ -433,6 +460,21 @@ def normalize_bbox(value: Any, width: int, height: int) -> list[int] | None:
     if x2 <= x1 or y2 <= y1:
         return None
     return [x1, y1, x2, y2]
+
+
+def normalize_bbox(value: Any, width: int, height: int) -> list[int] | None:
+    box = raw_bbox(value)
+    if not box:
+        return None
+    return project_bbox(box, width, height, "pixel")
+
+
+def normalize_model_bbox(value: Any, width: int, height: int, coord_space: str | None = None) -> list[int] | None:
+    box = raw_bbox(value)
+    if not box:
+        return None
+    space = coord_space or detect_bbox_space([box], width, height, model_like=True)
+    return project_bbox(box, width, height, space)
 
 
 def scale_bbox(box: list[float], width: int, height: int, scale_x: float, scale_y: float) -> list[int] | None:
@@ -467,18 +509,36 @@ def scale_grounding_boxes_in_report(report: str, width: int, height: int, scale_
     only after report synthesis and never reads GT.
     """
 
-    if not report or (scale_x == 1.0 and scale_y == 1.0):
+    if not report:
         return report
+
+    raw_boxes: list[list[float]] = []
+    for match in GROUNDING_BOX_RE.finditer(report):
+        nums = re.findall(r"-?\d+(?:\.\d+)?", match.group(1))
+        if len(nums) < 4:
+            continue
+        try:
+            box = raw_bbox([float(v) for v in nums[:4]])
+        except ValueError:
+            box = None
+        if box:
+            raw_boxes.append(box)
+    coord_space = detect_bbox_space(raw_boxes, width, height, model_like=True)
 
     def replace(match: re.Match[str]) -> str:
         nums = re.findall(r"-?\d+(?:\.\d+)?", match.group(1))
         if len(nums) < 4:
             return match.group(0)
         try:
-            box = [float(v) for v in nums[:4]]
+            raw = raw_bbox([float(v) for v in nums[:4]])
         except ValueError:
             return match.group(0)
-        scaled = scale_bbox(box, width, height, scale_x, scale_y)
+        if not raw:
+            return match.group(0)
+        box = project_bbox(raw, width, height, coord_space)
+        if not box:
+            return match.group(0)
+        scaled = box if scale_x == 1.0 and scale_y == 1.0 else scale_bbox(box, width, height, scale_x, scale_y)
         if not scaled:
             return match.group(0)
         return f"[GROUNDING]:{scaled}"
@@ -608,27 +668,39 @@ def forged_threshold_for_language(
 
 
 def collect_spans(ocr_layout: dict[str, Any], width: int, height: int) -> dict[str, list[int]]:
+    raw_entries: list[tuple[str, list[float]]] = []
     spans: dict[str, list[int]] = {}
     for span in ocr_layout.get("text_spans") or []:
         if not isinstance(span, dict):
             continue
         span_id = str(span.get("id") or "")
-        bbox = normalize_bbox(span.get("bbox"), width, height)
+        bbox = raw_bbox(span.get("bbox"))
+        if span_id and bbox:
+            raw_entries.append((span_id, bbox))
+    coord_space = detect_bbox_space([bbox for _, bbox in raw_entries], width, height, model_like=True)
+    for span_id, raw in raw_entries:
+        bbox = project_bbox(raw, width, height, coord_space)
         if span_id and bbox:
             spans[span_id] = bbox
     return spans
 
 
 def collect_candidate_boxes(evidence: dict[str, Any], width: int, height: int) -> dict[str, list[int]]:
+    raw_entries: list[tuple[str, list[float]]] = []
     boxes: dict[str, list[int]] = {}
     for key in ("visual_candidates", "logical_candidates"):
         for candidate in evidence.get(key) or []:
             if not isinstance(candidate, dict):
                 continue
             cid = str(candidate.get("id") or "")
-            bbox = normalize_bbox(candidate.get("bbox"), width, height)
+            bbox = raw_bbox(candidate.get("bbox"))
             if cid and bbox:
-                boxes[cid] = bbox
+                raw_entries.append((cid, bbox))
+    coord_space = detect_bbox_space([bbox for _, bbox in raw_entries], width, height, model_like=True)
+    for cid, raw in raw_entries:
+        bbox = project_bbox(raw, width, height, coord_space)
+        if cid and bbox:
+            boxes[cid] = bbox
     return boxes
 
 
@@ -650,6 +722,14 @@ def normalize_validated(
 
     span_boxes = collect_spans(ocr_layout, width, height)
     candidate_boxes = collect_candidate_boxes(evidence, width, height)
+    raw_anomaly_boxes = [
+        box
+        for anomaly in validated.get("validated_anomalies") or []
+        if isinstance(anomaly, dict)
+        for box in [raw_bbox(anomaly.get("bbox"))]
+        if box
+    ]
+    anomaly_coord_space = detect_bbox_space(raw_anomaly_boxes, width, height, model_like=True)
 
     normalized: list[dict[str, Any]] = []
     if verdict == "FORGED":
@@ -661,7 +741,7 @@ def normalize_validated(
                 str(v) for v in anomaly.get("source_candidate_ids") or [] if str(v) in candidate_boxes
             ]
             boxes = [span_boxes[sid] for sid in span_ids] or [candidate_boxes[cid] for cid in source_ids]
-            bbox = union_boxes(boxes) or normalize_bbox(anomaly.get("bbox"), width, height)
+            bbox = union_boxes(boxes) or normalize_model_bbox(anomaly.get("bbox"), width, height, anomaly_coord_space)
             if not bbox:
                 continue
             category = str(anomaly.get("category") or "text tampering")

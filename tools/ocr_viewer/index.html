@@ -15,6 +15,7 @@
       --red: #d02f2f;
       --amber: #c47a00;
       --green: #168056;
+      --violet: #8a46c8;
     }
     * { box-sizing: border-box; }
     body {
@@ -134,6 +135,15 @@
       height: auto;
       user-select: none;
     }
+    .mask-layer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: fill;
+      pointer-events: none;
+      display: none;
+    }
     .overlay {
       position: absolute;
       inset: 0;
@@ -160,9 +170,13 @@
     .ocr text { fill: var(--blue); }
     .ground rect { stroke: var(--red); fill: var(--red); }
     .ground text { fill: var(--red); }
+    .final rect { stroke: var(--amber); fill: var(--amber); }
+    .final text { fill: var(--amber); }
+    .gt rect { stroke: var(--green); fill: var(--green); }
+    .gt text { fill: var(--green); }
     .selected rect {
-      stroke: var(--amber);
-      fill: var(--amber);
+      stroke: var(--violet);
+      fill: var(--violet);
       stroke-width: 4;
     }
     .right {
@@ -266,7 +280,10 @@
       <div class="toolbar">
         <div class="toggles">
           <button id="toggleOcr" class="active">OCR boxes</button>
-          <button id="toggleGround" class="active">Grounding boxes</button>
+          <button id="toggleGround" class="active">Pred boxes</button>
+          <button id="toggleFinal">Final boxes</button>
+          <button id="toggleGt" class="active">GT boxes</button>
+          <button id="toggleMask" class="active">GT mask</button>
           <button id="toggleLabels" class="active">Labels</button>
         </div>
         <div id="imageMeta" class="sample-meta"></div>
@@ -274,6 +291,7 @@
       <div class="viewport">
         <div id="imageWrap" class="image-wrap">
           <img id="docImage" alt="">
+          <img id="maskImage" class="mask-layer" alt="">
           <svg id="overlay" class="overlay"></svg>
         </div>
       </div>
@@ -310,6 +328,9 @@
       selectedKey: "",
       showOcr: true,
       showGround: true,
+      showFinal: false,
+      showGt: true,
+      showMask: true,
       showLabels: true,
       query: ""
     };
@@ -320,6 +341,7 @@
     const sampleList = el("sampleList");
     const searchInput = el("searchInput");
     const docImage = el("docImage");
+    const maskImage = el("maskImage");
     const overlay = el("overlay");
     const selectedInfo = el("selectedInfo");
     const spanTable = el("spanTable");
@@ -334,6 +356,16 @@
 
     function boxText(box) {
       return `[${box.join(", ")}]`;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      })[ch]);
     }
 
     function filteredSampleIds() {
@@ -363,7 +395,7 @@
         const verdict = s.verdict || "UNKNOWN";
         return `<button class="sample-row${active}" data-id="${id}">
           <span class="sample-id">${id}</span>
-          <span class="sample-meta">${verdict} · ${s.ocr_spans.length} OCR boxes · ${s.grounding_boxes.length} grounding</span>
+          <span class="sample-meta">${escapeHtml(verdict)} · ${s.ocr_spans.length} OCR · ${s.grounding_boxes.length} pred · ${s.gt_boxes.length} GT</span>
         </button>`;
       }).join("");
       sampleList.querySelectorAll(".sample-row").forEach((btn) => {
@@ -381,10 +413,12 @@
         ["Source", region.kind],
         ["ID", region.id],
         ["Box", boxText(region.bbox)],
+        ["Raw Box", region.raw_bbox ? boxText(region.raw_bbox) : ""],
+        ["Coord", region.coord_space || "pixel"],
         ["Role", region.role || ""],
         ["Confidence", region.confidence ?? ""],
         ["Text", region.text || ""]
-      ].map(([k, v]) => `<div class="key">${k}</div><div>${String(v)}</div>`).join("");
+      ].map(([k, v]) => `<div class="key">${escapeHtml(k)}</div><div>${escapeHtml(v)}</div>`).join("");
     }
 
     function allRegions(s) {
@@ -394,6 +428,12 @@
       }
       if (state.showGround) {
         s.grounding_boxes.forEach((r) => regions.push({...r, kind: "ground"}));
+      }
+      if (state.showFinal) {
+        s.final_grounding_boxes.forEach((r) => regions.push({...r, kind: "final"}));
+      }
+      if (state.showGt) {
+        s.gt_boxes.forEach((r) => regions.push({...r, kind: "gt"}));
       }
       return regions;
     }
@@ -438,20 +478,21 @@
       el("sampleTitle").textContent = `${s.sample_id} · ${s.image_name || ""}`;
       const verdictClass = String(s.verdict || "").toLowerCase();
       el("badges").innerHTML = [
-        `<span class="badge ${verdictClass}">${s.verdict || "UNKNOWN"}</span>`,
+        `<span class="badge ${verdictClass}">${escapeHtml(s.verdict || "UNKNOWN")}</span>`,
+        `<span class="badge">${escapeHtml(s.gt_label ? `GT ${s.gt_label}` : "no GT")}</span>`,
         `<span class="badge">risk ${s.risk_score ?? ""}</span>`,
         `<span class="badge">${s.width} x ${s.height}</span>`,
-        `<span class="badge">${s.document_language || "unknown"}</span>`,
-        `<span class="badge">${s.layout_model || "layout model unknown"}</span>`,
-        `<span class="badge">${s.ocr_transcript_model || "no OCR cache"}</span>`
+        `<span class="badge">${escapeHtml(s.document_language || "unknown")}</span>`,
+        `<span class="badge">${escapeHtml(s.layout_model || "layout model unknown")}</span>`,
+        `<span class="badge">${escapeHtml(s.ocr_transcript_model || "no OCR cache")}</span>`
       ].join("");
       el("transcript").textContent = s.transcript || "";
       spanTable.innerHTML = s.ocr_spans.map((span) => {
         const key = `ocr:${span.id}`;
         return `<tr class="${state.selectedKey === key ? "active" : ""}" data-key="${key}">
-          <td>${span.id}</td>
+          <td>${escapeHtml(span.id)}</td>
           <td class="coord">${boxText(span.bbox)}</td>
-          <td>${span.text}</td>
+          <td>${escapeHtml(span.text)}</td>
         </tr>`;
       }).join("");
       spanTable.querySelectorAll("tr").forEach((row) => {
@@ -461,7 +502,14 @@
           drawOverlay();
         });
       });
-      el("imageMeta").textContent = `${s.ocr_spans.length} OCR boxes · ${s.grounding_boxes.length} grounding boxes · ${s.invalid_spans} invalid spans`;
+      el("imageMeta").textContent = `${s.ocr_spans.length} OCR · ${s.grounding_boxes.length} pred · ${s.final_grounding_boxes.length} final · ${s.gt_boxes.length} GT · ${s.invalid_spans} invalid`;
+      if (s.gt_mask_url && state.showMask) {
+        maskImage.src = s.gt_mask_url;
+        maskImage.style.display = "block";
+      } else {
+        maskImage.removeAttribute("src");
+        maskImage.style.display = "none";
+      }
     }
 
     function render() {
@@ -499,6 +547,23 @@
       el("toggleGround").classList.toggle("active", state.showGround);
       state.selectedKey = "";
       render();
+    });
+    el("toggleFinal").addEventListener("click", () => {
+      state.showFinal = !state.showFinal;
+      el("toggleFinal").classList.toggle("active", state.showFinal);
+      state.selectedKey = "";
+      render();
+    });
+    el("toggleGt").addEventListener("click", () => {
+      state.showGt = !state.showGt;
+      el("toggleGt").classList.toggle("active", state.showGt);
+      state.selectedKey = "";
+      render();
+    });
+    el("toggleMask").addEventListener("click", () => {
+      state.showMask = !state.showMask;
+      el("toggleMask").classList.toggle("active", state.showMask);
+      renderDetails();
     });
     el("toggleLabels").addEventListener("click", () => {
       state.showLabels = !state.showLabels;

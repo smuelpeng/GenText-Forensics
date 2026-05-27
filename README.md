@@ -104,6 +104,7 @@ MAX_SAMPLES=3 ./run_api_debug.sh
 - OCR cache：默认 `outputs/cache/ocr_transcripts/`；固定测试集应先缓存 OCR，避免反复调用。重建 300 张 OCR 时，优先考虑百炼 batch/offline OCR 以降低成本
 - OCR transcript 注入范围：默认只注入 Stage-1 OCR/Layout，帮助主 VLM 读文字和组织坐标；不直接注入 Stage-2 evidence 或 Stage-4 grounding，避免 OCR-only 噪声触发误判。可用 `OCR_TRANSCRIPT_TO_EVIDENCE=1` 或 `OCR_TRANSCRIPT_TO_GROUNDING=1` 做消融
 - Stage-1 OCR 模型替换：`OCR_MODEL` 仅用于消融，不建议用 Qwen-OCR 直接替换主 Stage-1；此前 60 样本实验显示它会显著增加假阳性
+- 坐标归一：模型阶段输出若被检测为常见的 `0-1000` 视觉坐标，会先投影到原图像素坐标，再进入 grounding/report 后处理
 - grounding box 扩张：默认 `GROUNDING_BOX_SCALE_X=3.5`、`GROUNDING_BOX_SCALE_Y=4.0`，用于把模型偏紧的异常中心框扩展到更接近文本区域的定位框
 - benign-error reviewer：默认开启。只在单个异常、低复杂度、解释主要来自 OCR/扫描/字体/排版等生产性瑕疵且缺少强篡改信号时，把低质量 forged 报告降级为 authentic。可用 `DISABLE_BENIGN_REVIEWER=1` 做消融。
 - taxonomy prompt：默认关闭。`docs/forgery_taxonomy.md` 总结了 GT 聚合诊断得到的伪造/误判范式，可用 `ENABLE_TAXONOMY_PROMPTS=1` 作为实验开关注入各阶段 prompt；当前 60 样本消融低于默认 v9，因此不作为默认路径。
@@ -133,12 +134,13 @@ python3 scripts/build_ocr_viewer_data.py \
   --raw-jsonl v9=outputs/raw/staged_cct_v9_offline_benign_reviewer_60.jsonl \
   --raw-jsonl v15=outputs/raw/staged_cct_v15_qwen_ocr_primary_stage1only_60.jsonl \
   --raw-jsonl v13-box-graft=outputs/raw/staged_cct_v13_ocr_boxes_on_v9_60.jsonl \
+  --gt-jsonl data/val_300.jsonl \
   --cache-model qwen-vl-ocr \
   --output outputs/ocr_viewer/data.json
 python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
-然后打开 `http://127.0.0.1:8765/tools/ocr_viewer/`。该页面只展示推理输出和 OCR cache，不包含 GT label、mask 或 report。
+然后打开 `http://127.0.0.1:8765/tools/ocr_viewer/`。该页面会把模型常见的 `0-1000` OCR/Layout 坐标投影到原图像素坐标；GT report boxes 和 mask 只作为本地诊断 overlay，不会进入模型 prompt。
 
 推理结果会写到：
 
