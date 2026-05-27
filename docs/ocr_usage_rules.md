@@ -7,10 +7,16 @@ DocShield/CCT baseline.
 
 - Use `/Users/penpen/Desktop/api-key.txt` for all online calls, including
   Qwen-OCR, because the primary key now has OCR access.
-- Current verified OCR model with the primary key: `qwen-vl-ocr`.
-  `qwen-vl-ocr-latest` and dated OCR model IDs may still return
+- Current verified OCR-capable models with the primary key: `qwen-vl-ocr` and
+  `qwen3.6-plus`.
+- `qwen-vl-ocr-latest` and dated OCR model IDs may still return
   `Model.AccessDenied`; do not use them in default commands unless access is
   re-verified.
+- For transcript-only OCR cache, `qwen-vl-ocr` remains the cheaper/faster first
+  choice. For line-level OCR coordinates used by grounding diagnostics,
+  `qwen3.6-plus` is a candidate model because the May 27 six-sample probe
+  produced more complete text+box rows, but it was slower and should be tested
+  on 60 samples before becoming the default.
 - `OCR_TRANSCRIPT_API_KEY_FILE` exists only as an override for controlled
   ablations. Leave it unset in normal runs.
 
@@ -33,8 +39,12 @@ DocShield/CCT baseline.
 
 ## Cache And Cost
 
-- OCR results are deterministic enough for this fixed validation set, so cache
-  them under `outputs/cache/ocr_transcripts/` and reuse them across experiments.
+- OCR transcript results are deterministic enough for this fixed validation set,
+  so cache them under `outputs/cache/ocr_transcripts/` and reuse them across
+  experiments.
+- OCR layout/text-box results should be cached under
+  `outputs/cache/ocr_layouts/<model>/` and compared by model before using them
+  for grounding.
 - Use the online OCR call path only for smoke tests, small ablations, and cache
   misses.
 - For rebuilding all 300 OCR results, prefer a cheaper batch/offline Qwen-OCR

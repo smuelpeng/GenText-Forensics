@@ -98,28 +98,49 @@ def convert_numbers(nums: list[float], width: int, height: int, source: str) -> 
     return clamp_box([a, b, a + c, b + d], width, height), "xywh"
 
 
+def numbers_from_value(value: Any) -> list[float]:
+    if isinstance(value, (int, float)):
+        return [float(value)]
+    if isinstance(value, str):
+        return [float(v) for v in re.findall(r"-?\d+(?:\.\d+)?", value)]
+    if isinstance(value, list):
+        nums: list[float] = []
+        for part in value:
+            nums.extend(numbers_from_value(part))
+        return nums
+    return []
+
+
 def parse_text_line(item: Any, idx: int, width: int, height: int, box_format: str) -> dict[str, Any] | None:
     if isinstance(item, dict):
         text = str(item.get("text") or item.get("content") or "")
         raw_box = item.get("bbox") or item.get("box")
         item_format = str(item.get("box_format") or box_format or "")
-        if not isinstance(raw_box, list) or len(raw_box) < 4:
+        if raw_box is None:
             return None
         try:
-            nums = [float(v) for v in raw_box[:5]]
+            nums = numbers_from_value(raw_box)[:5]
         except (TypeError, ValueError):
             return None
+        if len(nums) < 4:
+            return None
         box, detected_format = convert_numbers(nums, width, height, item_format)
-    elif isinstance(item, list) and len(item) >= 5:
+    elif isinstance(item, list):
         if isinstance(item[0], str):
-            text = str(item[0])
-            raw_nums = item[1:6]
+            if len(item) >= 2:
+                text = str(item[0])
+                raw_nums = item[1:6]
+            else:
+                text = ""
+                raw_nums = item[:1]
         else:
             text = ""
             raw_nums = item[:5]
         try:
-            nums = [float(v) for v in raw_nums]
+            nums = numbers_from_value(raw_nums)[:5]
         except (TypeError, ValueError):
+            return None
+        if len(nums) < 4:
             return None
         box, detected_format = convert_numbers(nums, width, height, box_format)
     else:
