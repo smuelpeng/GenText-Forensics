@@ -42,7 +42,7 @@ These are frequent in authentic reports and current model false positives:
 
 ## Current Flow Shortcomings Versus DocShield
 
-- OCR remains VLM-based unless an external OCR model is explicitly enabled; Qwen-OCR access is not currently available with the configured key.
+- OCR remains VLM-based unless an external OCR transcript model is explicitly enabled. Qwen-OCR is configured as an auxiliary text/coordinate tool only; it should not replace visual/layout reasoning or final judgement stages.
 - Visual cue extraction is prompt-only and lacks crop/zoom, edge/color/compression detectors, or textline segmentation.
 - Logical cue extraction is not fully independent from visual evidence; it is still bundled in the evidence prompt.
 - Cross-cue validation has a deterministic benign reviewer but no trained reward, no self-consistency loop, and no PR2-style reviewer refinement.

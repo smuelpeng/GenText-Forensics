@@ -40,7 +40,41 @@ def _taxonomy_block(stage_focus: str, enabled: bool) -> str:
     return f"\n{TAXONOMY_BRIEF}\n\n{stage_focus}\n"
 
 
-def ocr_layout_prompt(image_name: str, width: int, height: int, taxonomy_enabled: bool = False) -> str:
+def _ocr_transcript_block(ocr_transcript: str | None) -> str:
+    text = (ocr_transcript or "").strip()
+    if not text:
+        return ""
+    return f"""
+Auxiliary OCR transcript from a dedicated OCR model:
+{text}
+
+Use this transcript only as a text-reading aid. It may contain OCR errors,
+missing line breaks, or merged table cells. Spatial boxes must still come from
+the image itself, and OCR-only oddities are not evidence of forgery by
+themselves.
+"""
+
+
+def ocr_transcript_prompt(image_name: str, width: int, height: int) -> str:
+    return f"""OCR transcript extraction.
+
+Image: {image_name}
+Native image size: width={width}, height={height}.
+
+Return the visible document text only. Preserve the document's original
+language and reading order as much as possible. Do not add authenticity
+analysis, explanations, Markdown headings, or guesses about whether the document
+is forged.
+"""
+
+
+def ocr_layout_prompt(
+    image_name: str,
+    width: int,
+    height: int,
+    taxonomy_enabled: bool = False,
+    ocr_transcript: str | None = None,
+) -> str:
     critical_schema = ""
     critical_rule = ""
     if taxonomy_enabled:
@@ -61,6 +95,7 @@ def ocr_layout_prompt(image_name: str, width: int, height: int, taxonomy_enabled
 
 Image: {image_name}
 Native image size: width={width}, height={height}.
+{_ocr_transcript_block(ocr_transcript)}
 {_taxonomy_block(STAGE1_FOCUS, taxonomy_enabled)}
 
 Return ONLY valid JSON. Do not wrap in Markdown.
@@ -97,6 +132,7 @@ def evidence_prompt(
     width: int,
     height: int,
     taxonomy_enabled: bool = False,
+    ocr_transcript: str | None = None,
 ) -> str:
     candidate_extra_schema = ""
     candidate_rule = ""
@@ -114,6 +150,7 @@ Image: {image_name}
 Native image size: width={width}, height={height}.
 Stage 1 OCR/Layout JSON:
 {_json_dumps(ocr_layout)}
+{_ocr_transcript_block(ocr_transcript)}
 {_taxonomy_block(STAGE2_FOCUS, taxonomy_enabled)}
 
 Return ONLY valid JSON. Do not wrap in Markdown.
@@ -233,6 +270,7 @@ def grounding_prompt(
     width: int,
     height: int,
     taxonomy_enabled: bool = False,
+    ocr_transcript: str | None = None,
 ) -> str:
     patch_rule = ""
     if taxonomy_enabled:
@@ -243,6 +281,7 @@ Image: {image_name}
 Native image size: width={width}, height={height}.
 Stage 1 OCR/Layout JSON:
 {_json_dumps(ocr_layout)}
+{_ocr_transcript_block(ocr_transcript)}
 
 Stage 2 Evidence JSON:
 {_json_dumps(evidence)}
@@ -276,6 +315,7 @@ Required JSON schema:
 
 Rules:
 - Ground every Stage 3 anomaly by matching its span_ids/source_candidate_ids to Stage 1 OCR boxes and Stage 2 candidate boxes.
+- Use the auxiliary OCR transcript only to identify the exact text span that should be grounded; do not introduce new anomalies, verdicts, or risk changes from OCR text alone.
 - Grounding must come from OCR span boxes, candidate boxes, or their tight union. Do not invent unrelated coordinates.
 - If an anomaly is logical but references text, ground the exact text span(s) that carry the contradiction.
 - If an anomaly has source_candidate_ids but no span_ids, use the candidate bbox.

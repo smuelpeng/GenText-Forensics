@@ -98,10 +98,33 @@ MAX_SAMPLES=3 ./run_api_debug.sh
 - API key：`/Users/penpen/Desktop/api-key.txt`
 - forged 默认风险阈值：`80`，可用 `FORGED_RISK_THRESHOLD` 覆盖
 - Stage-1 语言感知风险阈值：`ar=70,id=75`，可用 `FORGED_RISK_THRESHOLDS` 覆盖；空字符串表示只使用默认阈值
-- Stage-1 OCR 模型：默认和主模型相同；如果百炼已开通 Qwen-OCR，可设置 `OCR_MODEL=qwen-vl-ocr-latest`
+- OCR 辅助模型：默认关闭；建议使用 `OCR_TRANSCRIPT_MODEL=qwen-vl-ocr`，只把 Qwen-OCR 作为文字/坐标辅助，不让它承担逻辑推理、验证或最终判断
+- 当前第一版 API key 已实测可调用 `qwen-vl-ocr`；`qwen-vl-ocr-latest` 仍会返回 `Model.AccessDenied`，不要作为默认模型
+- OCR API key：默认复用 `API_KEY_FILE=/Users/penpen/Desktop/api-key.txt`；`OCR_TRANSCRIPT_API_KEY_FILE` 只作为受控消融覆盖项，正常运行不要设置
+- OCR cache：默认 `outputs/cache/ocr_transcripts/`；固定测试集应先缓存 OCR，避免反复调用。重建 300 张 OCR 时，优先考虑百炼 batch/offline OCR 以降低成本
+- OCR transcript 注入范围：默认只注入 Stage-1 OCR/Layout，帮助主 VLM 读文字和组织坐标；不直接注入 Stage-2 evidence 或 Stage-4 grounding，避免 OCR-only 噪声触发误判。可用 `OCR_TRANSCRIPT_TO_EVIDENCE=1` 或 `OCR_TRANSCRIPT_TO_GROUNDING=1` 做消融
+- Stage-1 OCR 模型替换：`OCR_MODEL` 仅用于消融，不建议用 Qwen-OCR 直接替换主 Stage-1；此前 60 样本实验显示它会显著增加假阳性
 - grounding box 扩张：默认 `GROUNDING_BOX_SCALE_X=3.5`、`GROUNDING_BOX_SCALE_Y=4.0`，用于把模型偏紧的异常中心框扩展到更接近文本区域的定位框
 - benign-error reviewer：默认开启。只在单个异常、低复杂度、解释主要来自 OCR/扫描/字体/排版等生产性瑕疵且缺少强篡改信号时，把低质量 forged 报告降级为 authentic。可用 `DISABLE_BENIGN_REVIEWER=1` 做消融。
 - taxonomy prompt：默认关闭。`docs/forgery_taxonomy.md` 总结了 GT 聚合诊断得到的伪造/误判范式，可用 `ENABLE_TAXONOMY_PROMPTS=1` 作为实验开关注入各阶段 prompt；当前 60 样本消融低于默认 v9，因此不作为默认路径。
+
+OCR 使用规则见 `docs/ocr_usage_rules.md`。预热 OCR cache：
+
+```bash
+.venv/bin/python baselines/DocShield/cache_ocr_transcripts.py \
+  --input-jsonl data/val_300.jsonl \
+  --model qwen-vl-ocr \
+  --api-key-file /Users/penpen/Desktop/api-key.txt \
+  --num-workers 8
+```
+
+使用已缓存 OCR transcript 跑 staged pipeline：
+
+```bash
+API_KEY_FILE=/Users/penpen/Desktop/api-key.txt \
+OCR_TRANSCRIPT_MODEL=qwen-vl-ocr \
+MAX_SAMPLES=60 NUM_WORKERS=8 ./run_api_debug.sh
+```
 
 推理结果会写到：
 

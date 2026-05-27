@@ -39,6 +39,7 @@ from staged_prompts import (  # noqa: E402
     evidence_prompt,
     grounding_prompt,
     ocr_layout_prompt,
+    ocr_transcript_prompt,
     report_prompt,
     validation_prompt,
 )
@@ -379,6 +380,41 @@ def parse_json_object(raw: str) -> tuple[dict[str, Any], str | None]:
         return {}, "json_root_not_object"
     except json.JSONDecodeError as exc:
         return {}, f"json_decode_error: {exc}"
+
+
+def compact_text(text: str | None, max_chars: int) -> str:
+    cleaned = re.sub(r"\s+", " ", text or "").strip()
+    if max_chars <= 0 or len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[:max_chars].rstrip() + " ...[truncated]"
+
+
+def safe_cache_name(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+    return safe[:180] or "unknown"
+
+
+def transcript_cache_path(cache_dir: Path, model: str, sample_key: str) -> Path:
+    return cache_dir / safe_cache_name(model) / f"{safe_cache_name(sample_key)}.json"
+
+
+def read_transcript_cache(cache_path: Path) -> dict[str, Any] | None:
+    if not cache_path.exists():
+        return None
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if isinstance(data, dict) and isinstance(data.get("raw"), str):
+        return data
+    return None
+
+
+def write_transcript_cache(cache_path: Path, data: dict[str, Any]) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(cache_path)
 
 
 def normalize_bbox(value: Any, width: int, height: int) -> list[int] | None:
@@ -816,6 +852,27 @@ def run_stage(
     return raw, usage, parsed
 
 
+def run_text_stage(
+    *,
+    prompt: str,
+    image_path: Path | None,
+    model: str,
+    api_key: str,
+    max_tokens: int,
+    temperature: float,
+    timeout: int,
+) -> tuple[str, dict[str, Any]]:
+    return call_api(
+        build_messages(prompt, image_path),
+        model,
+        api_key,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        enable_thinking=False,
+        timeout=timeout,
+    )
+
+
 def process_row(
     row: dict[str, Any],
     *,
@@ -828,6 +885,12 @@ def process_row(
     forged_risk_threshold: int,
     language_risk_thresholds: dict[str, int],
     ocr_model: str | None,
+    ocr_transcript_model: str | None,
+    ocr_transcript_api_key: str | None,
+    ocr_transcript_max_chars: int,
+    ocr_transcript_cache_dir: Path | None,
+    ocr_transcript_to_evidence: bool,
+    ocr_transcript_to_grounding: bool,
     grounding_box_scale_x: float,
     grounding_box_scale_y: float,
     benign_reviewer_enabled: bool,
@@ -850,10 +913,61 @@ def process_row(
 
         stage_outputs: dict[str, Any] = {}
         stage_usages: dict[str, Any] = {}
+        ocr_transcript = ""
+
+        if ocr_transcript_model:
+            cache_key = str(sample_id or image_name)
+            cache_path = (
+                transcript_cache_path(ocr_transcript_cache_dir, ocr_transcript_model, cache_key)
+                if ocr_transcript_cache_dir
+                else None
+            )
+            cached = read_transcript_cache(cache_path) if cache_path else None
+            cache_hit = cached is not None
+            if cached:
+                transcript_raw = str(cached.get("raw") or "")
+                usage = dict(cached.get("usage") or {})
+            else:
+                transcript_raw, usage = run_text_stage(
+                    prompt=ocr_transcript_prompt(str(image_name), width, height),
+                    image_path=image_path,
+                    model=ocr_transcript_model,
+                    api_key=ocr_transcript_api_key or api_key,
+                    max_tokens=min(max_tokens, 4096),
+                    temperature=0.01,
+                    timeout=timeout,
+                )
+                if cache_path:
+                    write_transcript_cache(
+                        cache_path,
+                        {
+                            "sample_id": sample_id,
+                            "image_name": image_name,
+                            "model": ocr_transcript_model,
+                            "raw": transcript_raw,
+                            "usage": usage,
+                            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                        },
+                    )
+            ocr_transcript = compact_text(transcript_raw, ocr_transcript_max_chars)
+            stage_outputs["ocr_transcript"] = {
+                "raw": transcript_raw,
+                "text": ocr_transcript,
+                "model": ocr_transcript_model,
+                "cache_hit": cache_hit,
+                "cache_path": str(cache_path) if cache_path else "",
+            }
+            stage_usages["ocr_transcript"] = usage
 
         ocr_raw, usage, ocr_layout = run_stage(
             stage_name="ocr_layout",
-            prompt=ocr_layout_prompt(str(image_name), width, height, taxonomy_enabled=taxonomy_prompts),
+            prompt=ocr_layout_prompt(
+                str(image_name),
+                width,
+                height,
+                taxonomy_enabled=taxonomy_prompts,
+                ocr_transcript=ocr_transcript,
+            ),
             image_path=image_path,
             model=ocr_model or model,
             api_key=api_key,
@@ -867,7 +981,14 @@ def process_row(
 
         evidence_raw, usage, evidence = run_stage(
             stage_name="evidence",
-            prompt=evidence_prompt(ocr_layout or {}, str(image_name), width, height, taxonomy_enabled=taxonomy_prompts),
+            prompt=evidence_prompt(
+                ocr_layout or {},
+                str(image_name),
+                width,
+                height,
+                taxonomy_enabled=taxonomy_prompts,
+                ocr_transcript=ocr_transcript if ocr_transcript_to_evidence else "",
+            ),
             image_path=image_path,
             model=model,
             api_key=api_key,
@@ -913,6 +1034,7 @@ def process_row(
                 width,
                 height,
                 taxonomy_enabled=taxonomy_prompts,
+                ocr_transcript=ocr_transcript if ocr_transcript_to_grounding else "",
             ),
             image_path=image_path,
             model=model,
@@ -922,7 +1044,11 @@ def process_row(
             enable_thinking=enable_thinking,
             timeout=timeout,
         )
-        normalized_validation = normalize_validated(grounding or validation or {}, ocr_layout or {}, evidence or {}, width, height)
+        grounding_for_normalize = dict(grounding or validation or {})
+        if validation:
+            grounding_for_normalize["verdict"] = validation.get("verdict")
+            grounding_for_normalize["risk_score"] = validation.get("risk_score")
+        normalized_validation = normalize_validated(grounding_for_normalize, ocr_layout or {}, evidence or {}, width, height)
         stage_outputs["grounding"] = {
             "raw": grounding_raw,
             "parsed": grounding,
@@ -998,6 +1124,11 @@ def process_row(
             "grounding_box_scale_x": grounding_box_scale_x,
             "grounding_box_scale_y": grounding_box_scale_y,
             "taxonomy_prompts": taxonomy_prompts,
+            "ocr_transcript_model": ocr_transcript_model,
+            "ocr_transcript_max_chars": ocr_transcript_max_chars,
+            "ocr_transcript_cache_dir": str(ocr_transcript_cache_dir) if ocr_transcript_cache_dir else "",
+            "ocr_transcript_to_evidence": ocr_transcript_to_evidence,
+            "ocr_transcript_to_grounding": ocr_transcript_to_grounding,
         }
         stage_outputs["benign_reviewer"] = benign_review
         stage_usages["report"] = usage
@@ -1054,7 +1185,39 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--ocr-model",
         default="",
-        help="Optional model for Stage 1 OCR/Layout only, e.g. qwen-vl-ocr-latest when access is enabled.",
+        help="Optional model for Stage 1 OCR/Layout only. Do not use Qwen-OCR here except for ablations.",
+    )
+    p.add_argument(
+        "--ocr-transcript-model",
+        default="",
+        help=(
+            "Optional OCR-only transcript model used as auxiliary text/coordinate evidence, "
+            "not as a reasoning or verdict model, e.g. qwen-vl-ocr."
+        ),
+    )
+    p.add_argument(
+        "--ocr-transcript-api-key-file",
+        default="",
+        help=(
+            "Optional API key file used only for --ocr-transcript-model calls. "
+            "Falls back to --api-key-file when unset."
+        ),
+    )
+    p.add_argument("--ocr-transcript-max-chars", type=int, default=6000)
+    p.add_argument(
+        "--ocr-transcript-to-evidence",
+        action="store_true",
+        help="Also pass the raw OCR transcript to Stage 2 evidence extraction. Off by default to avoid OCR-only over-triggering.",
+    )
+    p.add_argument(
+        "--ocr-transcript-to-grounding",
+        action="store_true",
+        help="Also pass OCR transcript to Stage 4 grounding. Off by default; use only for explicit ablations.",
+    )
+    p.add_argument(
+        "--ocr-transcript-cache-dir",
+        default="outputs/cache/ocr_transcripts",
+        help="Cache directory for OCR transcript API responses. Set empty to disable.",
     )
     p.add_argument("--input-jsonl", default="data/val_300.jsonl")
     p.add_argument("--output-jsonl", default="outputs/raw/staged_docshield_api_val_60.jsonl")
@@ -1089,6 +1252,16 @@ def main() -> None:
     input_jsonl = resolve_repo_path(args.input_jsonl)
     ensure_data_available(input_jsonl)
     api_key = load_api_key(args.api_key_file)
+    ocr_transcript_api_key = None
+    if args.ocr_transcript_model:
+        ocr_transcript_api_key = (
+            load_api_key(args.ocr_transcript_api_key_file) if args.ocr_transcript_api_key_file else api_key
+        )
+    ocr_transcript_cache_dir = (
+        resolve_repo_path(args.ocr_transcript_cache_dir)
+        if args.ocr_transcript_cache_dir and args.ocr_transcript_model
+        else None
+    )
     try:
         language_risk_thresholds = parse_language_thresholds(args.forged_risk_thresholds)
     except ValueError as exc:
@@ -1130,7 +1303,8 @@ def main() -> None:
 
     print(
         f"[run_staged_docshield_api] model={args.model} rows={len(filtered)} "
-        f"ocr_model={args.ocr_model or 'same'} workers={args.num_workers} thinking={args.enable_thinking} "
+        f"ocr_model={args.ocr_model or 'same'} ocr_transcript_model={args.ocr_transcript_model or 'off'} "
+        f"workers={args.num_workers} thinking={args.enable_thinking} "
         f"default_threshold={args.forged_risk_threshold} lang_thresholds={language_risk_thresholds} "
         f"benign_reviewer={not args.disable_benign_reviewer} taxonomy_prompts={args.enable_taxonomy_prompts}"
     )
@@ -1150,6 +1324,12 @@ def main() -> None:
         "forged_risk_threshold": args.forged_risk_threshold,
         "language_risk_thresholds": language_risk_thresholds,
         "ocr_model": args.ocr_model or None,
+        "ocr_transcript_model": args.ocr_transcript_model or None,
+        "ocr_transcript_api_key": ocr_transcript_api_key,
+        "ocr_transcript_max_chars": args.ocr_transcript_max_chars,
+        "ocr_transcript_cache_dir": ocr_transcript_cache_dir,
+        "ocr_transcript_to_evidence": args.ocr_transcript_to_evidence,
+        "ocr_transcript_to_grounding": args.ocr_transcript_to_grounding,
         "grounding_box_scale_x": args.grounding_box_scale_x,
         "grounding_box_scale_y": args.grounding_box_scale_y,
         "benign_reviewer_enabled": not args.disable_benign_reviewer,

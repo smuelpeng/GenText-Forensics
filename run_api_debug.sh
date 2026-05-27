@@ -33,9 +33,20 @@ else
   if [[ "${ENABLE_TAXONOMY_PROMPTS:-0}" == "1" ]]; then
     TAXONOMY_PROMPT_ARGS+=(--enable-taxonomy-prompts)
   fi
+  OCR_TRANSCRIPT_ARGS=()
+  if [[ "${OCR_TRANSCRIPT_TO_EVIDENCE:-0}" == "1" ]]; then
+    OCR_TRANSCRIPT_ARGS+=(--ocr-transcript-to-evidence)
+  fi
+  if [[ "${OCR_TRANSCRIPT_TO_GROUNDING:-0}" == "1" ]]; then
+    OCR_TRANSCRIPT_ARGS+=(--ocr-transcript-to-grounding)
+  fi
   "$PYTHON_BIN" baselines/DocShield/run_staged_docshield_api.py \
     --model "${MODEL:-qwen3.6-35b-a3b}" \
     --ocr-model "${OCR_MODEL:-}" \
+    --ocr-transcript-model "${OCR_TRANSCRIPT_MODEL:-}" \
+    --ocr-transcript-api-key-file "${OCR_TRANSCRIPT_API_KEY_FILE:-}" \
+    --ocr-transcript-max-chars "${OCR_TRANSCRIPT_MAX_CHARS:-6000}" \
+    --ocr-transcript-cache-dir "${OCR_TRANSCRIPT_CACHE_DIR:-outputs/cache/ocr_transcripts}" \
     --input-jsonl data/val_300.jsonl \
     --output-jsonl "$RAW_JSONL" \
     --api-key-file "${API_KEY_FILE:-/Users/penpen/Desktop/api-key.txt}" \
@@ -52,5 +63,6 @@ else
     --benign-reviewer-max-anomalies "${BENIGN_REVIEWER_MAX_ANOMALIES:-1}" \
     ${BENIGN_REVIEWER_ARGS[@]+"${BENIGN_REVIEWER_ARGS[@]}"} \
     ${TAXONOMY_PROMPT_ARGS[@]+"${TAXONOMY_PROMPT_ARGS[@]}"} \
+    ${OCR_TRANSCRIPT_ARGS[@]+"${OCR_TRANSCRIPT_ARGS[@]}"} \
     --resume
 fi
