@@ -101,6 +101,7 @@ MAX_SAMPLES=3 ./run_api_debug.sh
 - Stage-1 OCR 模型：默认和主模型相同；如果百炼已开通 Qwen-OCR，可设置 `OCR_MODEL=qwen-vl-ocr-latest`
 - grounding box 扩张：默认 `GROUNDING_BOX_SCALE_X=3.5`、`GROUNDING_BOX_SCALE_Y=4.0`，用于把模型偏紧的异常中心框扩展到更接近文本区域的定位框
 - benign-error reviewer：默认开启。只在单个异常、低复杂度、解释主要来自 OCR/扫描/字体/排版等生产性瑕疵且缺少强篡改信号时，把低质量 forged 报告降级为 authentic。可用 `DISABLE_BENIGN_REVIEWER=1` 做消融。
+- taxonomy prompt：默认关闭。`docs/forgery_taxonomy.md` 总结了 GT 聚合诊断得到的伪造/误判范式，可用 `ENABLE_TAXONOMY_PROMPTS=1` 作为实验开关注入各阶段 prompt；当前 60 样本消融低于默认 v9，因此不作为默认路径。
 
 推理结果会写到：
 

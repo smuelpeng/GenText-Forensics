@@ -10,6 +10,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from forgery_taxonomy import (
+    STAGE1_FOCUS,
+    STAGE2_FOCUS,
+    STAGE3_FOCUS,
+    STAGE4_FOCUS,
+    STAGE5_FOCUS,
+    TAXONOMY_BRIEF,
+)
+
 
 SYSTEM_PROMPT = (
     "You are a document forensics examiner. Analyze only the provided image and "
@@ -25,11 +34,34 @@ def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-def ocr_layout_prompt(image_name: str, width: int, height: int) -> str:
+def _taxonomy_block(stage_focus: str, enabled: bool) -> str:
+    if not enabled:
+        return ""
+    return f"\n{TAXONOMY_BRIEF}\n\n{stage_focus}\n"
+
+
+def ocr_layout_prompt(image_name: str, width: int, height: int, taxonomy_enabled: bool = False) -> str:
+    critical_schema = ""
+    critical_rule = ""
+    if taxonomy_enabled:
+        critical_schema = """,
+  "critical_fields": [
+    {
+      "id": "c1",
+      "span_ids": ["s1"],
+      "field_type": "name|date|amount|total|id|score|row_label|logo|signature|other",
+      "why_critical": "short reason in the document's main language"
+    }
+  ]"""
+        critical_rule = (
+            "\n- For tables/lists, preserve row labels, numeric columns, totals, dates, "
+            "IDs, and names as separate spans when feasible."
+        )
     return f"""Stage 1: OCR/Layout extraction for document forgery analysis.
 
 Image: {image_name}
 Native image size: width={width}, height={height}.
+{_taxonomy_block(STAGE1_FOCUS, taxonomy_enabled)}
 
 Return ONLY valid JSON. Do not wrap in Markdown.
 
@@ -46,7 +78,7 @@ Required JSON schema:
       "role": "title|header|body|table|number|date|signature|stamp|logo|other",
       "confidence": 0.0
     }}
-  ],
+  ]{critical_schema},
   "layout_notes": ["short notes about tables, regions, stamps, portraits, logos"]
 }}
 
@@ -55,16 +87,34 @@ Rules:
 - Extract the most important text spans and suspicious-looking regions; do not invent text.
 - Keep field names in English, but values such as global_summary should follow the document language.
 - If text is unreadable, include the region with text="" and lower confidence.
+{critical_rule}
 """
 
 
-def evidence_prompt(ocr_layout: dict[str, Any], image_name: str, width: int, height: int) -> str:
+def evidence_prompt(
+    ocr_layout: dict[str, Any],
+    image_name: str,
+    width: int,
+    height: int,
+    taxonomy_enabled: bool = False,
+) -> str:
+    candidate_extra_schema = ""
+    candidate_rule = ""
+    if taxonomy_enabled:
+        candidate_extra_schema = """,
+      "criticality": "critical_field|supporting_field|decorative_or_background",
+      "benign_alternative": "possible benign explanation, or empty string\""""
+        candidate_rule = (
+            "\n- Do not create candidates for harmless whole-document scan quality or minor "
+            "typos unless they affect critical fields or pair with strong tampering cues."
+        )
     return f"""Stage 2: Evidence candidate extraction.
 
 Image: {image_name}
 Native image size: width={width}, height={height}.
 Stage 1 OCR/Layout JSON:
 {_json_dumps(ocr_layout)}
+{_taxonomy_block(STAGE2_FOCUS, taxonomy_enabled)}
 
 Return ONLY valid JSON. Do not wrap in Markdown.
 
@@ -76,7 +126,7 @@ Required JSON schema:
       "category": "font_mismatch|edge_artifact|color_mismatch|copy_paste_boundary|layout_inconsistency|rendering_artifact|other",
       "span_ids": ["s1"],
       "bbox": [x1, y1, x2, y2],
-      "evidence": "description in the document's main language",
+      "evidence": "description in the document's main language"{candidate_extra_schema},
       "confidence": 0.0
     }}
   ],
@@ -86,7 +136,7 @@ Required JSON schema:
       "category": "math_error|date_impossible|identity_conflict|semantic_contradiction|sequence_error|context_anachronism|other",
       "span_ids": ["s1", "s2"],
       "bbox": [x1, y1, x2, y2],
-      "evidence": "description in the document's main language",
+      "evidence": "description in the document's main language"{candidate_extra_schema},
       "confidence": 0.0
     }}
   ],
@@ -99,6 +149,7 @@ Rules:
 - If there is no concrete candidate, return empty arrays and authenticity_prior="authentic".
 - Every candidate must reference span_ids when text is involved.
 - Use native image pixel coordinates. Coordinates should cover the visible evidence region.
+{candidate_rule}
 """
 
 
@@ -108,7 +159,27 @@ def validation_prompt(
     image_name: str,
     width: int,
     height: int,
+    taxonomy_enabled: bool = False,
 ) -> str:
+    benign_review_schema = ""
+    if taxonomy_enabled:
+        benign_review_schema = """
+      "benign_alternative_review": "why benign alternatives are insufficient, in the document's main language","""
+    validation_rules = (
+        "- Validate candidates as document-authenticity evidence. Do not discard an anomaly merely because it could be caused by generation, OCR, proofreading, formatting, or template errors; those visible/logical defects can still indicate a forged or manipulated document in this benchmark.\n"
+        "- Discard only candidates that are genuinely benign, unreadable, unsupported by the image/OCR, or too vague to locate."
+    )
+    if taxonomy_enabled:
+        validation_rules = (
+            "- Validate candidates as document-authenticity evidence, not as generic image defects.\n"
+            "- Discard candidates that are genuinely benign, unreadable, unsupported by the image/OCR, too vague to locate, or merely production-quality issues without critical-field impact."
+        )
+    risk_rule = ""
+    if taxonomy_enabled:
+        risk_rule = (
+            "\n- Risk score guidance: 90-100 for multiple strong cues or direct critical-field tampering; "
+            "70-89 for one strong localized cue; 20-69 for weak suspicion; 0-10 for benign/unsupported."
+        )
     return f"""Stage 3: Cross-cue validation and filtering.
 
 Image: {image_name}
@@ -118,6 +189,7 @@ Stage 1 OCR/Layout JSON:
 
 Stage 2 Evidence JSON:
 {_json_dumps(evidence)}
+{_taxonomy_block(STAGE3_FOCUS, taxonomy_enabled)}
 
 Return ONLY valid JSON. Do not wrap in Markdown.
 
@@ -132,7 +204,7 @@ Required JSON schema:
       "source_candidate_ids": ["v1", "l1"],
       "span_ids": ["s1"],
       "visual_support": "visual evidence in the document's main language",
-      "logical_support": "logical evidence in the document's main language",
+      "logical_support": "logical evidence in the document's main language",{benign_review_schema}
       "reason": "final reason in the document's main language",
       "confidence": 0.0
     }}
@@ -144,12 +216,12 @@ Required JSON schema:
 }}
 
 Rules:
-- Validate candidates as document-authenticity evidence. Do not discard an anomaly merely because it could be caused by generation, OCR, proofreading, formatting, or template errors; those visible/logical defects can still indicate a forged or manipulated document in this benchmark.
-- Discard only candidates that are genuinely benign, unreadable, unsupported by the image/OCR, or too vague to locate.
+{validation_rules}
 - Logical contradictions that change document meaning, impossible dates, broken numbering, malformed names, garbled critical text, or inconsistent totals should usually survive validation even when visual artifacts are subtle.
 - Visual artifacts such as font/rendering mismatch, copy-paste boundaries, localized blur, color/edge inconsistency, or layout corruption should survive when they are localized.
 - If verdict is AUTHENTIC, validated_anomalies must be an empty array and risk_score must be 0-10.
 - If verdict is FORGED, every anomaly must keep source_candidate_ids or span_ids so the next grounding stage can map it to coordinates.
+{risk_rule}
 """
 
 
@@ -160,7 +232,11 @@ def grounding_prompt(
     image_name: str,
     width: int,
     height: int,
+    taxonomy_enabled: bool = False,
 ) -> str:
+    patch_rule = ""
+    if taxonomy_enabled:
+        patch_rule = "\n- If an anomaly involves occlusion/redaction/blur/erasure, ground the visible patch itself rather than the whole OCR line when possible."
     return f"""Stage 4: Spatial grounding for validated anomalies.
 
 Image: {image_name}
@@ -173,6 +249,7 @@ Stage 2 Evidence JSON:
 
 Stage 3 Validated Anomalies JSON:
 {_json_dumps(validated)}
+{_taxonomy_block(STAGE4_FOCUS, taxonomy_enabled)}
 
 Return ONLY valid JSON. Do not wrap in Markdown.
 
@@ -204,6 +281,7 @@ Rules:
 - If an anomaly has source_candidate_ids but no span_ids, use the candidate bbox.
 - If verdict is FORGED, every anomaly must have a valid bbox in native pixel coordinates.
 - If verdict is AUTHENTIC, return no anomalies and no boxes.
+{patch_rule}
 """
 
 
@@ -213,6 +291,7 @@ def report_prompt(
     image_name: str,
     width: int,
     height: int,
+    taxonomy_enabled: bool = False,
 ) -> str:
     return f"""Stage 5: Final report synthesis.
 
@@ -223,6 +302,7 @@ Stage 1 OCR/Layout JSON:
 
 Stage 3 Validated Anomalies JSON:
 {_json_dumps(validated)}
+{_taxonomy_block(STAGE5_FOCUS, taxonomy_enabled)}
 
 Write the final report only. Do not wrap in JSON or code fences.
 

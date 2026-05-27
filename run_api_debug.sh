@@ -29,6 +29,10 @@ else
   if [[ "${DISABLE_BENIGN_REVIEWER:-0}" == "1" ]]; then
     BENIGN_REVIEWER_ARGS+=(--disable-benign-reviewer)
   fi
+  TAXONOMY_PROMPT_ARGS=()
+  if [[ "${ENABLE_TAXONOMY_PROMPTS:-0}" == "1" ]]; then
+    TAXONOMY_PROMPT_ARGS+=(--enable-taxonomy-prompts)
+  fi
   "$PYTHON_BIN" baselines/DocShield/run_staged_docshield_api.py \
     --model "${MODEL:-qwen3.6-35b-a3b}" \
     --ocr-model "${OCR_MODEL:-}" \
@@ -46,6 +50,7 @@ else
     --benign-reviewer-min-hits "${BENIGN_REVIEWER_MIN_HITS:-1}" \
     --benign-reviewer-max-strong-hits "${BENIGN_REVIEWER_MAX_STRONG_HITS:-1}" \
     --benign-reviewer-max-anomalies "${BENIGN_REVIEWER_MAX_ANOMALIES:-1}" \
-    "${BENIGN_REVIEWER_ARGS[@]}" \
+    ${BENIGN_REVIEWER_ARGS[@]+"${BENIGN_REVIEWER_ARGS[@]}"} \
+    ${TAXONOMY_PROMPT_ARGS[@]+"${TAXONOMY_PROMPT_ARGS[@]}"} \
     --resume
 fi

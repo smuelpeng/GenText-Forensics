@@ -835,6 +835,7 @@ def process_row(
     benign_reviewer_min_hits: int,
     benign_reviewer_max_strong_hits: int,
     benign_reviewer_max_anomalies: int,
+    taxonomy_prompts: bool,
 ) -> dict[str, Any]:
     sample_id = row.get("sample_id")
     image_name = row.get("image_file") or Path(str(row.get("image_path") or "")).name
@@ -852,7 +853,7 @@ def process_row(
 
         ocr_raw, usage, ocr_layout = run_stage(
             stage_name="ocr_layout",
-            prompt=ocr_layout_prompt(str(image_name), width, height),
+            prompt=ocr_layout_prompt(str(image_name), width, height, taxonomy_enabled=taxonomy_prompts),
             image_path=image_path,
             model=ocr_model or model,
             api_key=api_key,
@@ -866,7 +867,7 @@ def process_row(
 
         evidence_raw, usage, evidence = run_stage(
             stage_name="evidence",
-            prompt=evidence_prompt(ocr_layout or {}, str(image_name), width, height),
+            prompt=evidence_prompt(ocr_layout or {}, str(image_name), width, height, taxonomy_enabled=taxonomy_prompts),
             image_path=image_path,
             model=model,
             api_key=api_key,
@@ -880,7 +881,14 @@ def process_row(
 
         validation_raw, usage, validation = run_stage(
             stage_name="validation",
-            prompt=validation_prompt(ocr_layout or {}, evidence or {}, str(image_name), width, height),
+            prompt=validation_prompt(
+                ocr_layout or {},
+                evidence or {},
+                str(image_name),
+                width,
+                height,
+                taxonomy_enabled=taxonomy_prompts,
+            ),
             image_path=image_path,
             model=model,
             api_key=api_key,
@@ -897,7 +905,15 @@ def process_row(
 
         grounding_raw, usage, grounding = run_stage(
             stage_name="grounding",
-            prompt=grounding_prompt(ocr_layout or {}, evidence or {}, validation or {}, str(image_name), width, height),
+            prompt=grounding_prompt(
+                ocr_layout or {},
+                evidence or {},
+                validation or {},
+                str(image_name),
+                width,
+                height,
+                taxonomy_enabled=taxonomy_prompts,
+            ),
             image_path=image_path,
             model=model,
             api_key=api_key,
@@ -921,7 +937,14 @@ def process_row(
 
         report_raw, usage, _ = run_stage(
             stage_name="report",
-            prompt=report_prompt(ocr_layout or {}, normalized_validation, str(image_name), width, height),
+            prompt=report_prompt(
+                ocr_layout or {},
+                normalized_validation,
+                str(image_name),
+                width,
+                height,
+                taxonomy_enabled=taxonomy_prompts,
+            ),
             image_path=None,
             model=model,
             api_key=api_key,
@@ -974,6 +997,7 @@ def process_row(
             "language_risk_thresholds": language_risk_thresholds,
             "grounding_box_scale_x": grounding_box_scale_x,
             "grounding_box_scale_y": grounding_box_scale_y,
+            "taxonomy_prompts": taxonomy_prompts,
         }
         stage_outputs["benign_reviewer"] = benign_review
         stage_usages["report"] = usage
@@ -1056,6 +1080,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--benign-reviewer-min-hits", type=int, default=1)
     p.add_argument("--benign-reviewer-max-strong-hits", type=int, default=1)
     p.add_argument("--benign-reviewer-max-anomalies", type=int, default=1)
+    p.add_argument("--enable-taxonomy-prompts", action="store_true")
     return p.parse_args()
 
 
@@ -1107,7 +1132,7 @@ def main() -> None:
         f"[run_staged_docshield_api] model={args.model} rows={len(filtered)} "
         f"ocr_model={args.ocr_model or 'same'} workers={args.num_workers} thinking={args.enable_thinking} "
         f"default_threshold={args.forged_risk_threshold} lang_thresholds={language_risk_thresholds} "
-        f"benign_reviewer={not args.disable_benign_reviewer}"
+        f"benign_reviewer={not args.disable_benign_reviewer} taxonomy_prompts={args.enable_taxonomy_prompts}"
     )
     mode = "a" if args.resume and out_path.exists() else "w"
     written = 0
@@ -1132,6 +1157,7 @@ def main() -> None:
         "benign_reviewer_min_hits": args.benign_reviewer_min_hits,
         "benign_reviewer_max_strong_hits": args.benign_reviewer_max_strong_hits,
         "benign_reviewer_max_anomalies": args.benign_reviewer_max_anomalies,
+        "taxonomy_prompts": args.enable_taxonomy_prompts,
     }
 
     if args.num_workers <= 1:
