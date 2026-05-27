@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OCR Coordinate Viewer</title>
+  <style>
+    :root {
+      --bg: #f5f6f7;
+      --panel: #ffffff;
+      --line: #d8dde3;
+      --text: #18212b;
+      --muted: #647181;
+      --blue: #1267d6;
+      --red: #d02f2f;
+      --amber: #c47a00;
+      --green: #168056;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      letter-spacing: 0;
+    }
+    header {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 650;
+      min-width: 190px;
+    }
+    select, input[type="search"], button {
+      height: 34px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      border-radius: 6px;
+      padding: 0 10px;
+      font-size: 14px;
+    }
+    button { cursor: pointer; }
+    button.active {
+      border-color: var(--blue);
+      color: var(--blue);
+      background: #eef5ff;
+    }
+    main {
+      height: calc(100vh - 56px);
+      display: grid;
+      grid-template-columns: 280px minmax(360px, 1fr) 420px;
+      min-height: 520px;
+    }
+    aside, section {
+      min-height: 0;
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .left {
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+    .searchbar {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .searchbar input { width: 100%; }
+    .sample-list {
+      overflow: auto;
+      padding: 8px;
+    }
+    .sample-row {
+      width: 100%;
+      text-align: left;
+      height: auto;
+      min-height: 48px;
+      display: grid;
+      gap: 3px;
+      padding: 8px;
+      border: 1px solid transparent;
+      background: transparent;
+    }
+    .sample-row.active {
+      border-color: var(--blue);
+      background: #eef5ff;
+    }
+    .sample-id { font-size: 13px; font-weight: 650; }
+    .sample-meta { font-size: 12px; color: var(--muted); }
+    .stage {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      background: #eef0f2;
+    }
+    .toolbar {
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .toggles {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .viewport {
+      min-height: 0;
+      overflow: auto;
+      padding: 18px;
+    }
+    .image-wrap {
+      position: relative;
+      width: min(100%, 980px);
+      margin: 0 auto;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+    .image-wrap img {
+      display: block;
+      width: 100%;
+      height: auto;
+      user-select: none;
+    }
+    .overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    .overlay rect {
+      vector-effect: non-scaling-stroke;
+      fill-opacity: 0.08;
+      stroke-width: 2;
+      pointer-events: auto;
+      cursor: pointer;
+    }
+    .overlay text {
+      font-size: 16px;
+      paint-order: stroke;
+      stroke: #fff;
+      stroke-width: 4px;
+      stroke-linejoin: round;
+      pointer-events: none;
+    }
+    .ocr rect { stroke: var(--blue); fill: var(--blue); }
+    .ocr text { fill: var(--blue); }
+    .ground rect { stroke: var(--red); fill: var(--red); }
+    .ground text { fill: var(--red); }
+    .selected rect {
+      stroke: var(--amber);
+      fill: var(--amber);
+      stroke-width: 4;
+    }
+    .right {
+      border-right: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+    .summary {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      gap: 8px;
+    }
+    .badges {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      font-size: 12px;
+      background: #fff;
+      color: var(--muted);
+    }
+    .badge.forged { color: var(--red); border-color: #efb4b4; }
+    .badge.authentic { color: var(--green); border-color: #a8d8c4; }
+    .details {
+      min-height: 0;
+      overflow: auto;
+      padding: 12px 14px 20px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+    h2 {
+      margin: 0 0 8px;
+      font-size: 14px;
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 5px 10px;
+      font-size: 13px;
+    }
+    .kv .key { color: var(--muted); }
+    .text-box {
+      max-height: 230px;
+      overflow: auto;
+      white-space: pre-wrap;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      font-size: 13px;
+      line-height: 1.45;
+      background: #fbfcfd;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 6px 4px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    tr.active { background: #fff7e5; }
+    .coord {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      white-space: nowrap;
+    }
+    @media (max-width: 980px) {
+      main { grid-template-columns: 1fr; grid-template-rows: 220px 1fr 420px; }
+      aside, section { border-right: 0; border-bottom: 1px solid var(--line); }
+      header { flex-wrap: wrap; height: auto; min-height: 56px; padding: 10px; }
+      .toolbar { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>OCR Coordinate Viewer</h1>
+    <label>Source <select id="sourceSelect"></select></label>
+    <label>Sample <select id="sampleSelect"></select></label>
+  </header>
+  <main>
+    <aside class="left">
+      <div class="searchbar">
+        <input id="searchInput" type="search" placeholder="Search sample">
+      </div>
+      <div id="sampleList" class="sample-list"></div>
+    </aside>
+    <section class="stage">
+      <div class="toolbar">
+        <div class="toggles">
+          <button id="toggleOcr" class="active">OCR boxes</button>
+          <button id="toggleGround" class="active">Grounding boxes</button>
+          <button id="toggleLabels" class="active">Labels</button>
+        </div>
+        <div id="imageMeta" class="sample-meta"></div>
+      </div>
+      <div class="viewport">
+        <div id="imageWrap" class="image-wrap">
+          <img id="docImage" alt="">
+          <svg id="overlay" class="overlay"></svg>
+        </div>
+      </div>
+    </section>
+    <section class="right">
+      <div class="summary">
+        <div id="sampleTitle" class="sample-id"></div>
+        <div id="badges" class="badges"></div>
+      </div>
+      <div class="details">
+        <div>
+          <h2>Selected Region</h2>
+          <div id="selectedInfo" class="kv"></div>
+        </div>
+        <div>
+          <h2>OCR Transcript</h2>
+          <div id="transcript" class="text-box"></div>
+        </div>
+        <div>
+          <h2>OCR/Layout Spans</h2>
+          <table>
+            <thead><tr><th>ID</th><th>Box</th><th>Text</th></tr></thead>
+            <tbody id="spanTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const state = {
+      data: null,
+      sourceLabel: "",
+      sampleId: "",
+      selectedKey: "",
+      showOcr: true,
+      showGround: true,
+      showLabels: true,
+      query: ""
+    };
+
+    const el = (id) => document.getElementById(id);
+    const sourceSelect = el("sourceSelect");
+    const sampleSelect = el("sampleSelect");
+    const sampleList = el("sampleList");
+    const searchInput = el("searchInput");
+    const docImage = el("docImage");
+    const overlay = el("overlay");
+    const selectedInfo = el("selectedInfo");
+    const spanTable = el("spanTable");
+
+    function source() {
+      return state.data.sources.find((s) => s.label === state.sourceLabel) || state.data.sources[0];
+    }
+
+    function sample() {
+      return source().samples[state.sampleId];
+    }
+
+    function boxText(box) {
+      return `[${box.join(", ")}]`;
+    }
+
+    function filteredSampleIds() {
+      const src = source();
+      const q = state.query.trim().toLowerCase();
+      return state.data.sample_order.filter((id) => src.samples[id]).filter((id) => {
+        if (!q) return true;
+        const s = src.samples[id];
+        return id.toLowerCase().includes(q) || String(s.image_name || "").toLowerCase().includes(q);
+      });
+    }
+
+    function renderSources() {
+      sourceSelect.innerHTML = state.data.sources.map((s) => `<option value="${s.label}">${s.label}</option>`).join("");
+      state.sourceLabel = state.data.sources[0].label;
+      sourceSelect.value = state.sourceLabel;
+    }
+
+    function renderSampleControls() {
+      const ids = filteredSampleIds();
+      if (!ids.includes(state.sampleId)) state.sampleId = ids[0] || "";
+      sampleSelect.innerHTML = ids.map((id) => `<option value="${id}">${id}</option>`).join("");
+      sampleSelect.value = state.sampleId;
+      sampleList.innerHTML = ids.map((id) => {
+        const s = source().samples[id];
+        const active = id === state.sampleId ? " active" : "";
+        const verdict = s.verdict || "UNKNOWN";
+        return `<button class="sample-row${active}" data-id="${id}">
+          <span class="sample-id">${id}</span>
+          <span class="sample-meta">${verdict} · ${s.ocr_spans.length} OCR boxes · ${s.grounding_boxes.length} grounding</span>
+        </button>`;
+      }).join("");
+      sampleList.querySelectorAll(".sample-row").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          state.sampleId = btn.dataset.id;
+          state.selectedKey = "";
+          render();
+        });
+      });
+    }
+
+    function regionInfo(region) {
+      if (!region) return `<div class="key">Status</div><div>No region selected</div>`;
+      return [
+        ["Source", region.kind],
+        ["ID", region.id],
+        ["Box", boxText(region.bbox)],
+        ["Role", region.role || ""],
+        ["Confidence", region.confidence ?? ""],
+        ["Text", region.text || ""]
+      ].map(([k, v]) => `<div class="key">${k}</div><div>${String(v)}</div>`).join("");
+    }
+
+    function allRegions(s) {
+      const regions = [];
+      if (state.showOcr) {
+        s.ocr_spans.forEach((r) => regions.push({...r, kind: "ocr"}));
+      }
+      if (state.showGround) {
+        s.grounding_boxes.forEach((r) => regions.push({...r, kind: "ground"}));
+      }
+      return regions;
+    }
+
+    function drawOverlay() {
+      const s = sample();
+      overlay.setAttribute("viewBox", `0 0 ${s.width} ${s.height}`);
+      overlay.innerHTML = "";
+      const regions = allRegions(s);
+      regions.forEach((region) => {
+        const [x1, y1, x2, y2] = region.bbox;
+        const key = `${region.kind}:${region.id}`;
+        const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        group.setAttribute("class", `${region.kind} ${state.selectedKey === key ? "selected" : ""}`);
+        const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        rect.setAttribute("x", x1);
+        rect.setAttribute("y", y1);
+        rect.setAttribute("width", x2 - x1);
+        rect.setAttribute("height", y2 - y1);
+        rect.addEventListener("click", () => {
+          state.selectedKey = key;
+          renderDetails();
+          drawOverlay();
+        });
+        group.appendChild(rect);
+        if (state.showLabels) {
+          const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          text.setAttribute("x", x1 + 3);
+          text.setAttribute("y", Math.max(16, y1 - 4));
+          text.textContent = region.id;
+          group.appendChild(text);
+        }
+        overlay.appendChild(group);
+      });
+    }
+
+    function renderDetails() {
+      const s = sample();
+      const regions = allRegions(s);
+      const selected = regions.find((r) => `${r.kind}:${r.id}` === state.selectedKey);
+      selectedInfo.innerHTML = regionInfo(selected);
+      el("sampleTitle").textContent = `${s.sample_id} · ${s.image_name || ""}`;
+      const verdictClass = String(s.verdict || "").toLowerCase();
+      el("badges").innerHTML = [
+        `<span class="badge ${verdictClass}">${s.verdict || "UNKNOWN"}</span>`,
+        `<span class="badge">risk ${s.risk_score ?? ""}</span>`,
+        `<span class="badge">${s.width} x ${s.height}</span>`,
+        `<span class="badge">${s.document_language || "unknown"}</span>`,
+        `<span class="badge">${s.layout_model || "layout model unknown"}</span>`,
+        `<span class="badge">${s.ocr_transcript_model || "no OCR cache"}</span>`
+      ].join("");
+      el("transcript").textContent = s.transcript || "";
+      spanTable.innerHTML = s.ocr_spans.map((span) => {
+        const key = `ocr:${span.id}`;
+        return `<tr class="${state.selectedKey === key ? "active" : ""}" data-key="${key}">
+          <td>${span.id}</td>
+          <td class="coord">${boxText(span.bbox)}</td>
+          <td>${span.text}</td>
+        </tr>`;
+      }).join("");
+      spanTable.querySelectorAll("tr").forEach((row) => {
+        row.addEventListener("click", () => {
+          state.selectedKey = row.dataset.key;
+          renderDetails();
+          drawOverlay();
+        });
+      });
+      el("imageMeta").textContent = `${s.ocr_spans.length} OCR boxes · ${s.grounding_boxes.length} grounding boxes · ${s.invalid_spans} invalid spans`;
+    }
+
+    function render() {
+      renderSampleControls();
+      const s = sample();
+      if (!s) return;
+      docImage.src = s.image_url;
+      docImage.alt = s.sample_id;
+      renderDetails();
+      drawOverlay();
+    }
+
+    sourceSelect.addEventListener("change", () => {
+      state.sourceLabel = sourceSelect.value;
+      state.selectedKey = "";
+      render();
+    });
+    sampleSelect.addEventListener("change", () => {
+      state.sampleId = sampleSelect.value;
+      state.selectedKey = "";
+      render();
+    });
+    searchInput.addEventListener("input", () => {
+      state.query = searchInput.value;
+      render();
+    });
+    el("toggleOcr").addEventListener("click", () => {
+      state.showOcr = !state.showOcr;
+      el("toggleOcr").classList.toggle("active", state.showOcr);
+      state.selectedKey = "";
+      render();
+    });
+    el("toggleGround").addEventListener("click", () => {
+      state.showGround = !state.showGround;
+      el("toggleGround").classList.toggle("active", state.showGround);
+      state.selectedKey = "";
+      render();
+    });
+    el("toggleLabels").addEventListener("click", () => {
+      state.showLabels = !state.showLabels;
+      el("toggleLabels").classList.toggle("active", state.showLabels);
+      drawOverlay();
+    });
+
+    fetch("/outputs/ocr_viewer/data.json")
+      .then((r) => r.json())
+      .then((data) => {
+        state.data = data;
+        renderSources();
+        state.sampleId = data.sample_order[0] || "";
+        render();
+      })
+      .catch((err) => {
+        document.body.innerHTML = `<pre style="padding:20px">Failed to load /outputs/ocr_viewer/data.json\n${err}</pre>`;
+      });
+  </script>
+</body>
+</html>

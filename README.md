@@ -126,6 +126,20 @@ OCR_TRANSCRIPT_MODEL=qwen-vl-ocr \
 MAX_SAMPLES=60 NUM_WORKERS=8 ./run_api_debug.sh
 ```
 
+查看 OCR/Layout 坐标和 grounding 坐标：
+
+```bash
+python3 scripts/build_ocr_viewer_data.py \
+  --raw-jsonl v9=outputs/raw/staged_cct_v9_offline_benign_reviewer_60.jsonl \
+  --raw-jsonl v15=outputs/raw/staged_cct_v15_qwen_ocr_primary_stage1only_60.jsonl \
+  --raw-jsonl v13-box-graft=outputs/raw/staged_cct_v13_ocr_boxes_on_v9_60.jsonl \
+  --cache-model qwen-vl-ocr \
+  --output outputs/ocr_viewer/data.json
+python3 -m http.server 8765 --bind 127.0.0.1
+```
+
+然后打开 `http://127.0.0.1:8765/tools/ocr_viewer/`。该页面只展示推理输出和 OCR cache，不包含 GT label、mask 或 report。
+
 推理结果会写到：
 
 ```text
