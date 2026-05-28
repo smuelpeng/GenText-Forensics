@@ -43,6 +43,14 @@ add_result "v19-multilan-stage1" \
   "outputs/raw/staged_cct_v19_multilan_stage1_60.jsonl" \
   "outputs/eval/staged_cct_v19_multilan_stage1_60.json"
 
+add_result "v20-formal-v13-grounder" \
+  "outputs/raw/staged_cct_v20_formal_v13_grounder_60.jsonl" \
+  "outputs/eval/staged_cct_v20_formal_v13_grounder_60.json"
+
+add_result "v21-fp-reviewer-v2" \
+  "outputs/raw/staged_cct_v21_fp_reviewer_v2_tuned_60.jsonl" \
+  "outputs/eval/staged_cct_v21_fp_reviewer_v2_tuned_60.json"
+
 if [[ "${#RAW_ARGS[@]}" -eq 0 ]]; then
   echo "No result JSONL files found under outputs/raw." >&2
   exit 1

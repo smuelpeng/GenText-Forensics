@@ -167,6 +167,8 @@ python3 -m http.server 8765 --bind 127.0.0.1
 
 然后打开 `http://127.0.0.1:8765/tools/ocr_viewer/`。页面中的 `Qwen OCR` 是独立 OCR layout cache；`VLM layout` 是 staged Stage-1 输出，不再混称为 OCR。`Version Comparison` 表会横向列出 v9/v13/v16/v17/v18/v19 等已有结果的指标、判定、框数量和样本级 issue；`All final boxes` 可以把多个版本的最终定位框同时叠加到同一张图上。该页面会把模型常见的 `0-1000` OCR/Layout 坐标投影到原图像素坐标；GT report boxes 和 mask 只作为本地诊断 overlay，不会进入模型 prompt。
 
+当前 best 路径可以用两个 GT-blind 后处理脚本复现：`scripts/graft_grounding_boxes.py` 保留 base 检测/报告、只从 OCR-assisted run 嫁接 grounding boxes；`scripts/review_false_positives_v2.py` 对低复杂度、弱证据的 forged 报告做保守降级。二者只读取模型输出，不读取 label、GT report 或 mask。
+
 推理结果会写到：
 
 ```text
