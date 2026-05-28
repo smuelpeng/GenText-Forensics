@@ -21,7 +21,7 @@ if [[ "$PIPELINE" == "prompt" ]]; then
     --api-key-file "${API_KEY_FILE:-/Users/penpen/Desktop/api-key.txt}" \
     --max-tokens "${MAX_TOKENS:-8192}" \
     --max-samples "$MAX_SAMPLES" \
-    --num-workers "${NUM_WORKERS:-1}" \
+    --num-workers "${NUM_WORKERS:-8}" \
     --resume
 else
   RAW_JSONL="${OUTPUT_JSONL:-outputs/raw/staged_docshield_api_val_${TAG}.jsonl}"
@@ -66,7 +66,7 @@ else
     --api-key-file "${API_KEY_FILE:-/Users/penpen/Desktop/api-key.txt}" \
     --max-tokens "${MAX_TOKENS:-8192}" \
     --max-samples "$MAX_SAMPLES" \
-    --num-workers "${NUM_WORKERS:-1}" \
+    --num-workers "${NUM_WORKERS:-8}" \
     --forged-risk-threshold "${FORGED_RISK_THRESHOLD:-80}" \
     --forged-risk-thresholds "${FORGED_RISK_THRESHOLDS:-ar=70,id=75}" \
     --grounding-box-scale-x "${GROUNDING_BOX_SCALE_X:-3.5}" \

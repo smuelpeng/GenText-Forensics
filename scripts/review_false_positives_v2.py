@@ -36,6 +36,11 @@ WEAK_SPECULATION_TERMS = (
     "generated content",
     "lack of human proofreading",
     "poor proofreading",
+    "format word",
+    "untranslated english",
+    "english technical term",
+    "without supporting content",
+    "empty page",
     "common artifact",
     "common artefact",
     "spelling",
@@ -78,12 +83,19 @@ WEAK_SPECULATION_TERMS = (
     "ตัวอักษร",
     "การจัดวาง",
     "เว้นบรรทัด",
+    "ว่างเปล่า",
+    "ไม่มีเนื้อหา",
+    "พื้นที่ว่าง",
+    "เกือบทั้งหมด",
     "ซ้ำ",
     "สะกด",
     "สร้าง",
     "มาตรฐาน",
     "คุณภาพ",
     "تنسيق",
+    "مصطلح إنجليزي",
+    "عبارة إنجليزية",
+    "لاتينية",
     "لغوية",
     "إملائية",
     "خط",
@@ -158,6 +170,48 @@ HARD_EVIDENCE_TERMS = (
     "الاسم",
 )
 
+LOCALIZED_PROTECT_TERMS = (
+    "compared to adjacent",
+    "compared to the adjacent",
+    "compared with adjacent",
+    "adjacent fax",
+    "adjacent text",
+    "date column",
+    "phone number",
+    "fax number",
+    "missing characters",
+    "missing chars",
+    "incorrect spacing",
+    "garbled as",
+)
+
+LOGICAL_SINGLE_PROTECT_TERMS = (
+    "financial forecast",
+    "财务预测",
+    "基本每股收益",
+    "固定资本",
+    "固定资产",
+    "会计科目",
+    "會計科目",
+    "bibliografi",
+    "daftar pustaka",
+    "referensi",
+    "cak nun",
+    "出版日期",
+    "報名截止",
+    "报名截止",
+    "hierarki indeks",
+    "konten indeks",
+    "pegawai",
+)
+
+VISUAL_ARTIFACT_DOWNGRADE_TERMS = (
+    "html tag",
+    "<br>",
+    "white band",
+    "white seam",
+)
+
 
 def repo_path(path: str | Path) -> Path:
     p = Path(path)
@@ -202,16 +256,39 @@ def should_downgrade(
     anomaly_count = len(ANOMALY_RE.findall(report))
     weak_hits = count_hits(report, WEAK_SPECULATION_TERMS)
     hard_hits = count_hits(report, HARD_EVIDENCE_TERMS)
+    protect_hits = count_hits(report, LOCALIZED_PROTECT_TERMS)
+    logical_protect_hits = count_hits(report, LOGICAL_SINGLE_PROTECT_TERMS)
     width = int(row.get("width") or 0)
     height = int(row.get("height") or 0)
     wide_ratio = wide_box_ratio(report, width, height) if width and height else 0.0
-
-    downgrade = (
+    protected = anomaly_count >= 2 and hard_hits >= 1 and protect_hits >= 2
+    lowered_report = report.lower()
+    logical_single_downgrade = (
         parsed.get("conclusion") == "FORGED"
         and risk <= max_risk
-        and anomaly_count <= max_anomalies
-        and weak_hits >= min_weak_hits
-        and hard_hits <= max_hard_hits
+        and anomaly_count == 1
+        and "logical fraud" in lowered_report
+        and "visual clumsy" not in lowered_report
+        and logical_protect_hits == 0
+    )
+    visual_artifact_downgrade = (
+        parsed.get("conclusion") == "FORGED"
+        and risk <= max_risk
+        and anomaly_count <= 2
+        and any(term in lowered_report for term in VISUAL_ARTIFACT_DOWNGRADE_TERMS)
+    )
+
+    downgrade = (
+        logical_single_downgrade
+        or visual_artifact_downgrade
+        or (
+            parsed.get("conclusion") == "FORGED"
+            and risk <= max_risk
+            and anomaly_count <= max_anomalies
+            and weak_hits >= min_weak_hits
+            and hard_hits <= max_hard_hits
+            and not protected
+        )
     )
     if (
         allow_wide_exception
@@ -222,6 +299,7 @@ def should_downgrade(
         and weak_hits >= min_weak_hits + 2
         and hard_hits <= max(max_hard_hits, 1)
         and wide_ratio >= 0.5
+        and not protected
     ):
         downgrade = True
 
@@ -230,12 +308,18 @@ def should_downgrade(
         "anomaly_count": anomaly_count,
         "weak_hits": weak_hits,
         "hard_hits": hard_hits,
+        "protect_hits": protect_hits,
+        "logical_protect_hits": logical_protect_hits,
+        "logical_single_downgrade": logical_single_downgrade,
+        "visual_artifact_downgrade": visual_artifact_downgrade,
+        "protected": protected,
         "wide_box_ratio": wide_ratio,
         "decision": "AUTHENTIC" if downgrade else parsed.get("conclusion", "UNKNOWN"),
         "applied": downgrade,
         "policy": (
             "Downgrade low-complexity forged reports dominated by speculative world-knowledge, "
-            "font/OCR/layout/spelling, or generic AI-generation claims without hard localized tamper evidence."
+            "font/OCR/layout/spelling, or generic AI-generation claims without hard localized tamper evidence; "
+            "preserve reports with multiple concrete localized comparison cues."
         ),
     }
 
@@ -278,8 +362,8 @@ def main() -> None:
                 ocr_layout = ((stage_outputs.get("ocr_layout") or {}).get("parsed") or {})
                 report = ensure_report_structure(authentic_downgrade_report(ocr_layout))
                 out["raw_output"] = report
-                out["parsed"] = parse_cct_report(report)
                 downgraded += 1
+            out["parsed"] = parse_cct_report(str(out.get("raw_output") or ""))
             out["stage_outputs"] = stage_outputs
             dst.write(json.dumps(out, ensure_ascii=False) + "\n")
     print(f"wrote {out_path} rows={total} downgraded={downgraded}")

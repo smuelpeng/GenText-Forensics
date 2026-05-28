@@ -51,6 +51,22 @@ add_result "v21-fp-reviewer-v2" \
   "outputs/raw/staged_cct_v21_fp_reviewer_v2_tuned_60.jsonl" \
   "outputs/eval/staged_cct_v21_fp_reviewer_v2_tuned_60.json"
 
+add_result "v28-full-visual-fp-review" \
+  "outputs/raw/staged_cct_v28_visual_artifact_reviewer_300.jsonl" \
+  "outputs/eval/staged_cct_v28_visual_artifact_reviewer_300.json"
+
+add_result "v31-full-trigger-rescue" \
+  "outputs/raw/staged_cct_v31_strong_trigger_rescue_300.jsonl" \
+  "outputs/eval/staged_cct_v31_strong_trigger_rescue_300.json"
+
+add_result "v35-full-plus-targeted" \
+  "outputs/raw/staged_cct_v35_plus_targeted_rescue_300.jsonl" \
+  "outputs/eval/staged_cct_v35_plus_targeted_rescue_300.json"
+
+add_result "v37-full-zoom-crop-best" \
+  "outputs/raw/staged_cct_v37_zoom_crop_rescue_300.jsonl" \
+  "outputs/eval/staged_cct_v37_zoom_crop_rescue_300.json"
+
 if [[ "${#RAW_ARGS[@]}" -eq 0 ]]; then
   echo "No result JSONL files found under outputs/raw." >&2
   exit 1
