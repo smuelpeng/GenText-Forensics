@@ -1109,6 +1109,7 @@ def process_row(
     ocr_transcript_api_key: str | None,
     ocr_transcript_max_chars: int,
     ocr_transcript_cache_dir: Path | None,
+    require_ocr_transcript_cache: bool,
     ocr_transcript_to_evidence: bool,
     ocr_transcript_to_grounding: bool,
     ocr_layout_cache_model: str | None,
@@ -1169,6 +1170,11 @@ def process_row(
             if cached:
                 transcript_raw = str(cached.get("raw") or "")
                 usage = dict(cached.get("usage") or {})
+            elif require_ocr_transcript_cache:
+                raise RuntimeError(
+                    f"Missing required OCR transcript cache for {cache_key}: "
+                    f"{cache_path if cache_path else ''}"
+                )
             else:
                 transcript_raw, usage = run_text_stage(
                     prompt=ocr_transcript_prompt(str(image_name), width, height),
@@ -1372,6 +1378,7 @@ def process_row(
             "ocr_transcript_model": ocr_transcript_model,
             "ocr_transcript_max_chars": ocr_transcript_max_chars,
             "ocr_transcript_cache_dir": str(ocr_transcript_cache_dir) if ocr_transcript_cache_dir else "",
+            "require_ocr_transcript_cache": require_ocr_transcript_cache,
             "ocr_transcript_to_evidence": ocr_transcript_to_evidence,
             "ocr_transcript_to_grounding": ocr_transcript_to_grounding,
             "ocr_layout_cache_model": ocr_layout_cache_model,
@@ -1469,6 +1476,11 @@ def parse_args() -> argparse.Namespace:
         "--ocr-transcript-cache-dir",
         default="outputs/cache/ocr_transcripts",
         help="Cache directory for OCR transcript API responses. Set empty to disable.",
+    )
+    p.add_argument(
+        "--require-ocr-transcript-cache",
+        action="store_true",
+        help="Fail a row if --ocr-transcript-model is enabled but its transcript cache is missing.",
     )
     p.add_argument(
         "--ocr-layout-cache-model",
@@ -1613,6 +1625,7 @@ def main() -> None:
         "ocr_transcript_api_key": ocr_transcript_api_key,
         "ocr_transcript_max_chars": args.ocr_transcript_max_chars,
         "ocr_transcript_cache_dir": ocr_transcript_cache_dir,
+        "require_ocr_transcript_cache": args.require_ocr_transcript_cache,
         "ocr_transcript_to_evidence": args.ocr_transcript_to_evidence,
         "ocr_transcript_to_grounding": args.ocr_transcript_to_grounding,
         "ocr_layout_cache_model": args.ocr_layout_cache_model or None,

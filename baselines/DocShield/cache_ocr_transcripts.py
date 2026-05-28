@@ -32,6 +32,7 @@ from run_staged_docshield_api import (  # noqa: E402
     transcript_cache_path,
     write_transcript_cache,
 )
+from cache_ocr_layouts import call_dashscope_native_ocr  # noqa: E402
 from staged_prompts import ocr_transcript_prompt  # noqa: E402
 
 
@@ -41,6 +42,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model", default="qwen-vl-ocr")
     p.add_argument("--api-key-file", default="/Users/penpen/Desktop/api-key.txt")
     p.add_argument("--cache-dir", default="outputs/cache/ocr_transcripts")
+    p.add_argument(
+        "--api-mode",
+        choices=["openai-prompt", "dashscope-native"],
+        default="openai-prompt",
+        help="Use prompt-based OpenAI-compatible OCR, or DashScope native OCR options.",
+    )
+    p.add_argument("--ocr-task", default="multi_lan", help="DashScope native OCR task.")
+    p.add_argument("--min-pixels", type=int, default=32 * 32 * 3)
+    p.add_argument("--max-pixels", type=int, default=32 * 32 * 8192)
+    p.add_argument("--enable-rotate", action="store_true")
+    p.add_argument("--sample-id", action="append", default=[], help="Only cache matching sample_id values.")
     p.add_argument("--max-samples", type=int, default=0, help="0 = all")
     p.add_argument("--num-workers", type=int, default=8)
     p.add_argument("--max-tokens", type=int, default=4096)
@@ -111,6 +123,11 @@ def process_row(
     model: str,
     api_key: str,
     cache_dir: Path,
+    api_mode: str,
+    ocr_task: str,
+    min_pixels: int,
+    max_pixels: int,
+    enable_rotate: bool,
     max_tokens: int,
     timeout: int,
     max_chars: int,
@@ -130,24 +147,44 @@ def process_row(
     with Image.open(image_path) as im:
         width, height = im.size
 
-    raw, usage = run_text_stage(
-        prompt=ocr_transcript_prompt(image_name, width, height),
-        image_path=image_path,
-        model=model,
-        api_key=api_key,
-        max_tokens=max_tokens,
-        temperature=0.01,
-        timeout=timeout,
-    )
+    native_response: dict[str, Any] | None = None
+    if api_mode == "dashscope-native":
+        native_response = call_dashscope_native_ocr(
+            image_path=image_path,
+            model=model,
+            api_key=api_key,
+            ocr_task=ocr_task,
+            min_pixels=min_pixels,
+            max_pixels=max_pixels,
+            enable_rotate=enable_rotate,
+            timeout=timeout,
+        )
+        choice = ((native_response.get("output") or {}).get("choices") or [{}])[0]
+        content = ((choice.get("message") or {}).get("content") or [{}])[0]
+        raw = str(content.get("text") or "")
+        usage = native_response.get("usage") or {}
+    else:
+        raw, usage = run_text_stage(
+            prompt=ocr_transcript_prompt(image_name, width, height),
+            image_path=image_path,
+            model=model,
+            api_key=api_key,
+            max_tokens=max_tokens,
+            temperature=0.01,
+            timeout=timeout,
+        )
     write_transcript_cache(
         cache_path,
         {
             "sample_id": row.get("sample_id"),
             "image_name": image_name,
             "model": model,
+            "api_mode": api_mode,
+            "ocr_task": ocr_task if api_mode == "dashscope-native" else "",
             "raw": raw,
             "text": compact_text(raw, max_chars),
             "usage": usage,
+            "native_response": native_response,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         },
     )
@@ -159,6 +196,9 @@ def main() -> None:
     input_jsonl = resolve_repo_path(args.input_jsonl)
     ensure_data_available(input_jsonl)
     rows = read_jsonl(input_jsonl)
+    if args.sample_id:
+        wanted = set(args.sample_id)
+        rows = [row for row in rows if row_key(row) in wanted]
     if args.max_samples > 0:
         rows = rows[: args.max_samples]
     ensure_sample_assets_available(rows)
@@ -172,11 +212,17 @@ def main() -> None:
     written = 0
     cached = 0
     errors = 0
+    error_records: list[dict[str, str]] = []
 
     kwargs = {
         "model": args.model,
         "api_key": api_key,
         "cache_dir": cache_dir,
+        "api_mode": args.api_mode,
+        "ocr_task": args.ocr_task,
+        "min_pixels": args.min_pixels,
+        "max_pixels": args.max_pixels,
+        "enable_rotate": args.enable_rotate,
         "max_tokens": args.max_tokens,
         "timeout": args.timeout,
         "max_chars": args.max_chars,
@@ -199,8 +245,10 @@ def main() -> None:
                     rec = future.result()
                     written += rec["status"] == "written"
                     cached += rec["status"] == "cached"
-                except Exception:
+                except Exception as exc:
                     errors += 1
+                    row = futures[future]
+                    error_records.append({"sample_id": row_key(row), "error": str(exc)})
                 pbar.update(1)
                 pbar.set_postfix(written=written, cached=cached, err=errors)
             pbar.close()
@@ -209,6 +257,8 @@ def main() -> None:
         f"[cache_ocr_transcripts] done: rows={len(rows)} written={written} cached={cached} "
         f"errors={errors} cache_dir={cache_dir}"
     )
+    for rec in error_records[:10]:
+        print(f"[cache_ocr_transcripts] error sample_id={rec['sample_id']}: {rec['error']}")
     if errors:
         raise SystemExit(1)
 

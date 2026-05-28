@@ -40,6 +40,9 @@ else
   if [[ "${OCR_TRANSCRIPT_TO_GROUNDING:-0}" == "1" ]]; then
     OCR_TRANSCRIPT_ARGS+=(--ocr-transcript-to-grounding)
   fi
+  if [[ "${REQUIRE_OCR_TRANSCRIPT_CACHE:-0}" == "1" ]]; then
+    OCR_TRANSCRIPT_ARGS+=(--require-ocr-transcript-cache)
+  fi
   OCR_LAYOUT_ARGS=()
   if [[ "${REQUIRE_OCR_LAYOUT_CACHE:-0}" == "1" ]]; then
     OCR_LAYOUT_ARGS+=(--require-ocr-layout-cache)

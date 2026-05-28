@@ -99,7 +99,7 @@ MAX_SAMPLES=3 ./run_api_debug.sh
 - forged 默认风险阈值：`80`，可用 `FORGED_RISK_THRESHOLD` 覆盖
 - Stage-1 语言感知风险阈值：`ar=70,id=75`，可用 `FORGED_RISK_THRESHOLDS` 覆盖；空字符串表示只使用默认阈值
 - OCR layout 辅助：默认读取 `OCR_LAYOUT_CACHE_MODEL=qwen-vl-ocr` 的 native DashScope OCR cache，把文字框作为 CCT 的感知锚点；该 runner 不会在线调用 OCR，缺 cache 时只记录 cache miss
-- OCR transcript 辅助模型：默认关闭；只在消融时使用 `OCR_TRANSCRIPT_MODEL=qwen-vl-ocr`，不让它承担逻辑推理、验证或最终判断
+- OCR transcript 辅助模型：默认关闭；只在消融时使用 `OCR_TRANSCRIPT_MODEL=qwen-vl-ocr`，不让它承担逻辑推理、验证或最终判断；多语言纯文本补充应使用 native `multi_lan` cache
 - 当前第一版 API key 已实测可调用 `qwen-vl-ocr`；`qwen-vl-ocr-latest` 仍会返回 `Model.AccessDenied`，不要作为默认模型
 - OCR API key：默认复用 `API_KEY_FILE=/Users/penpen/Desktop/api-key.txt`；`OCR_TRANSCRIPT_API_KEY_FILE` 只作为受控消融覆盖项，正常运行不要设置
 - OCR layout cache：默认 `outputs/cache/ocr_layouts/qwen-vl-ocr/`；固定测试集应先缓存 300 张 native OCR boxes，避免 staged CCT 运行时重复调用 OCR。可用 `REQUIRE_OCR_LAYOUT_CACHE=1` 强制缺 cache 即失败
@@ -122,14 +122,29 @@ OCR 使用规则见 `docs/ocr_usage_rules.md`。默认先预热 native layout ca
   --num-workers 8
 ```
 
-可选预热 transcript cache，只用于 transcript 消融：
+可选预热 native multilingual transcript cache，只用于 Stage-1 语言/文本补充或 transcript 消融；该结果只有纯文本，不含坐标，不承担逻辑推理：
 
 ```bash
 .venv/bin/python baselines/DocShield/cache_ocr_transcripts.py \
   --input-jsonl data/val_300.jsonl \
   --model qwen-vl-ocr \
+  --api-mode dashscope-native \
+  --ocr-task multi_lan \
+  --cache-dir outputs/cache/ocr_transcripts_multilan \
   --api-key-file /Users/penpen/Desktop/api-key.txt \
   --num-workers 8
+```
+
+如需在 staged pipeline 中只把 `multi_lan` transcript 作为 Stage-1 补充输入：
+
+```bash
+API_KEY_FILE=/Users/penpen/Desktop/api-key.txt \
+OCR_TRANSCRIPT_MODEL=qwen-vl-ocr \
+OCR_TRANSCRIPT_CACHE_DIR=outputs/cache/ocr_transcripts_multilan \
+REQUIRE_OCR_TRANSCRIPT_CACHE=1 \
+OCR_LAYOUT_CACHE_MODEL=qwen-vl-ocr \
+REQUIRE_OCR_LAYOUT_CACHE=1 \
+MAX_SAMPLES=60 NUM_WORKERS=8 ./run_api_debug.sh
 ```
 
 Qwen-OCR layout cache 只保存 OCR 文本框，不读取 label、GT report、mask，也不做逻辑推理。坐标应优先使用 DashScope 原生 `advanced_recognition` 任务。该路径会返回官方 `ocr_result.words_info`，包含文字、四点 `location` 和 `rotate_rect`；脚本会转换成原图像素 `xyxy` 后再给 viewer 和 CCT 使用。`openai-prompt` 模式只作为消融和兼容路径，不作为 `qwen-vl-ocr` 坐标默认调用方式。

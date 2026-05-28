@@ -16,6 +16,10 @@ DocShield/CCT baseline.
   `ocr_options={"task": "advanced_recognition"}`. This returns official
   `ocr_result.words_info` entries with `text`, quadrilateral `location`, and
   `rotate_rect` fields.
+- For difficult multilingual documents, use the DashScope native API with
+  `ocr_options={"task": "multi_lan"}` as a supplemental transcript channel.
+  This task returns plain recognized text, not reliable forensic judgement and
+  not coordinate boxes.
 - Do not use the prompt-based OpenAI-compatible path as the default for
   `qwen-vl-ocr` coordinates. Qwen-OCR does not support custom system messages,
   and prompt-forced JSON can miss the model's built-in OCR task.
@@ -45,12 +49,20 @@ DocShield/CCT baseline.
 - Do not pass raw OCR text directly into evidence extraction unless running an
   explicit ablation, because OCR-only text noise can over-trigger forged
   decisions.
+- Multilingual transcript cache may be passed to Stage 1 only to improve
+  document-language detection, OCR recovery, and reading order for Arabic,
+  Malay/Indonesian, Thai, Chinese, and mixed-language samples. Do not gate this
+  behavior by GT `language` or `language_code`; enable it explicitly for an
+  experiment or cache all selected samples uniformly.
 
 ## Cache And Cost
 
 - OCR transcript results are deterministic enough for this fixed validation set,
   so cache them under `outputs/cache/ocr_transcripts/` and reuse them across
   experiments.
+- Native multilingual transcript results should be cached separately under
+  `outputs/cache/ocr_transcripts_multilan/<model>/` with
+  `--api-mode dashscope-native --ocr-task multi_lan`.
 - OCR layout/text-box results should be cached under
   `outputs/cache/ocr_layouts/<model>/` and compared by model before using them
   for grounding. The default coordinate cache command should include
