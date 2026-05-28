@@ -138,6 +138,51 @@ def parse_source_arg(value: str) -> tuple[str, Path]:
     return path.stem, path
 
 
+def load_eval_payload(eval_json: Path | None) -> dict[str, Any]:
+    if not eval_json or not eval_json.exists():
+        return {"summary": {}, "samples": {}}
+    try:
+        data = json.loads(eval_json.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {"summary": {"error": "json_error", "path": str(eval_json)}, "samples": {}}
+
+    sample_map: dict[str, dict[str, Any]] = {}
+    for row in data.get("samples") or []:
+        if not isinstance(row, dict):
+            continue
+        keys = {
+            str(row.get("sample_id") or ""),
+            Path(str(row.get("image_name") or "")).stem,
+        }
+        compact = {
+            "gt_label": row.get("gt_label"),
+            "pred_label": row.get("pred_label"),
+            "det_correct": row.get("det_correct"),
+            "loc_score": row.get("loc_score"),
+            "mask_iou": row.get("mask_iou"),
+            "mask_f1": row.get("mask_f1"),
+            "box_miou": row.get("box_miou"),
+            "exp_score": row.get("exp_score"),
+            "rep_score": row.get("rep_score"),
+            "pred_boxes": row.get("pred_boxes"),
+            "gt_boxes": row.get("gt_boxes"),
+            "issues": row.get("issues") or [],
+        }
+        for key in keys:
+            if key:
+                sample_map[key] = compact
+    return {
+        "summary": {
+            "path": str(eval_json.relative_to(REPO_ROOT)) if eval_json.is_relative_to(REPO_ROOT) else str(eval_json),
+            "num_common": data.get("num_common"),
+            "scores": data.get("scores") or {},
+            "top_issues": data.get("top_issues") or {},
+            "confusion": data.get("confusion") or {},
+        },
+        "samples": sample_map,
+    }
+
+
 def load_cache_text(cache_dir: Path, model: str, key: str) -> str:
     path = cache_dir / safe_cache_name(model) / f"{safe_cache_name(key)}.json"
     if not path.exists():
@@ -229,6 +274,7 @@ def make_mask_overlay(mask_path: str, output_dir: Path, key: str) -> tuple[str, 
 def build_source(
     label: str,
     path: Path,
+    eval_payload: dict[str, Any],
     cache_dir: Path,
     cache_model: str,
     layout_cache_dir: Path,
@@ -283,6 +329,9 @@ def build_source(
             if report_path.exists():
                 gt_report = report_path.read_text(encoding="utf-8")
         mask_url, mask_bbox = make_mask_overlay(str(gt_row.get("mask_path") or ""), mask_output_dir, key)
+        eval_sample = (eval_payload.get("samples") or {}).get(key) or (
+            eval_payload.get("samples") or {}
+        ).get(Path(str(rec.get("image_name") or "")).stem) or {}
         samples[key] = {
             "sample_id": key,
             "image_name": rec.get("image_name"),
@@ -334,9 +383,15 @@ def build_source(
             "gt_mask_url": mask_url,
             "gt_mask_bbox": mask_bbox,
             "gt_label": gt_row.get("label_codalab") or gt_row.get("label"),
+            "eval": eval_sample,
             "invalid_spans": invalid_spans,
         }
-    return {"label": label, "path": str(path.relative_to(REPO_ROOT)), "samples": samples}
+    return {
+        "label": label,
+        "path": str(path.relative_to(REPO_ROOT)),
+        "eval": eval_payload.get("summary") or {},
+        "samples": samples,
+    }
 
 
 def main() -> None:
@@ -346,6 +401,12 @@ def main() -> None:
         action="append",
         required=True,
         help="Source JSONL. Use label=path to control display label. Can be repeated.",
+    )
+    parser.add_argument(
+        "--eval-json",
+        action="append",
+        default=[],
+        help="Optional eval JSON. Use label=path matching --raw-jsonl labels. Can be repeated.",
     )
     parser.add_argument("--cache-dir", default="outputs/cache/ocr_transcripts")
     parser.add_argument("--cache-model", default="qwen-vl-ocr")
@@ -357,18 +418,23 @@ def main() -> None:
     args = parser.parse_args()
 
     gt_rows = load_gt_rows(repo_path(args.gt_jsonl) if args.gt_jsonl else None)
-    sources = [
-        build_source(
-            *parse_source_arg(v),
-            repo_path(args.cache_dir),
-            args.cache_model,
-            repo_path(args.ocr_layout_cache_dir),
-            args.ocr_layout_model,
-            gt_rows,
-            repo_path(args.mask_output_dir),
+    evals = {label: load_eval_payload(path) for label, path in (parse_source_arg(v) for v in args.eval_json)}
+    sources = []
+    for raw_arg in args.raw_jsonl:
+        label, path = parse_source_arg(raw_arg)
+        sources.append(
+            build_source(
+                label,
+                path,
+                evals.get(label) or {"summary": {}, "samples": {}},
+                repo_path(args.cache_dir),
+                args.cache_model,
+                repo_path(args.ocr_layout_cache_dir),
+                args.ocr_layout_model,
+                gt_rows,
+                repo_path(args.mask_output_dir),
+            )
         )
-        for v in args.raw_jsonl
-    ]
     sample_order = sorted({key for source in sources for key in source["samples"]})
     payload = {"sources": sources, "sample_order": sample_order}
     out_path = repo_path(args.output)

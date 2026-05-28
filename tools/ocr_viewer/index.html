@@ -18,6 +18,7 @@
       --violet: #8a46c8;
       --cyan: #008199;
       --cyan-bg: #ecfbfd;
+      --compare: #6c45b8;
     }
     * { box-sizing: border-box; }
     body {
@@ -178,6 +179,8 @@
     .final text { fill: var(--amber); }
     .gt rect { stroke: var(--green); fill: var(--green); }
     .gt text { fill: var(--green); }
+    .compare rect { stroke: var(--compare); fill: var(--compare); fill-opacity: 0.06; }
+    .compare text { fill: var(--compare); }
     .selected rect {
       stroke: var(--violet);
       fill: var(--violet);
@@ -246,6 +249,24 @@
       display: grid;
       gap: 8px;
     }
+    .compare-table tr { cursor: pointer; }
+    .compare-table tr.active { background: #eef5ff; }
+    .swatch {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      margin-right: 6px;
+      vertical-align: -1px;
+    }
+    .metric {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      white-space: nowrap;
+    }
+    .issues {
+      color: var(--muted);
+      max-width: 220px;
+    }
     .table-wrap {
       max-height: 260px;
       overflow: auto;
@@ -299,6 +320,7 @@
           <button id="toggleOcr">VLM layout</button>
           <button id="toggleGround" class="active">Pred boxes</button>
           <button id="toggleFinal">Final boxes</button>
+          <button id="toggleCompare">All final boxes</button>
           <button id="toggleGt" class="active">GT boxes</button>
           <button id="toggleMask" class="active">GT mask</button>
           <button id="toggleLabels" class="active">Labels</button>
@@ -322,6 +344,15 @@
         <div>
           <h2>Selected Region</h2>
           <div id="selectedInfo" class="kv"></div>
+        </div>
+        <div class="region-card">
+          <h2>Version Comparison</h2>
+          <div class="table-wrap">
+            <table class="compare-table">
+              <thead><tr><th>Version</th><th>Score</th><th>Verdict</th><th>Boxes</th><th>Issues</th></tr></thead>
+              <tbody id="compareTable"></tbody>
+            </table>
+          </div>
         </div>
         <div>
           <h2>OCR Transcript</h2>
@@ -358,6 +389,7 @@
       showQwen: true,
       showGround: true,
       showFinal: false,
+      showCompare: false,
       showGt: true,
       showMask: true,
       showLabels: true,
@@ -373,6 +405,7 @@
     const maskImage = el("maskImage");
     const overlay = el("overlay");
     const selectedInfo = el("selectedInfo");
+    const compareTable = el("compareTable");
     const qwenSpanTable = el("qwenSpanTable");
     const spanTable = el("spanTable");
 
@@ -380,8 +413,22 @@
       return state.data.sources.find((s) => s.label === state.sourceLabel) || state.data.sources[0];
     }
 
+    function sourceIndex(label) {
+      return state.data.sources.findIndex((s) => s.label === label);
+    }
+
+    function sourceColor(label) {
+      const colors = ["#d02f2f", "#1267d6", "#c47a00", "#168056", "#8a46c8", "#008199", "#b23a74", "#5f6d20"];
+      const idx = sourceIndex(label);
+      return colors[(idx < 0 ? 0 : idx) % colors.length];
+    }
+
     function sample() {
       return source().samples[state.sampleId];
+    }
+
+    function sampleForSource(src, sampleId = state.sampleId) {
+      return src.samples[sampleId] || null;
     }
 
     function boxText(box) {
@@ -441,6 +488,7 @@
       if (!region) return `<div class="key">Status</div><div>No region selected</div>`;
       return [
         ["Source", region.kind],
+        ["Version", region.source_label || ""],
         ["ID", region.id],
         ["Box", boxText(region.bbox)],
         ["Raw Box", region.raw_bbox ? boxText(region.raw_bbox) : ""],
@@ -452,8 +500,29 @@
       ].map(([k, v]) => `<div class="key">${escapeHtml(k)}</div><div>${escapeHtml(v)}</div>`).join("");
     }
 
+    function compareRegions() {
+      if (!state.showCompare) return [];
+      const regions = [];
+      state.data.sources.forEach((src) => {
+        const s = sampleForSource(src);
+        if (!s) return;
+        s.final_grounding_boxes.forEach((r) => {
+          regions.push({
+            ...r,
+            kind: "compare",
+            source_label: src.label,
+            color: sourceColor(src.label),
+            id: `${src.label}:${r.id}`,
+            text: `${src.label} ${r.id}`
+          });
+        });
+      });
+      return regions;
+    }
+
     function allRegions(s) {
       const regions = [];
+      regions.push(...compareRegions());
       if (state.showQwen) {
         s.qwen_ocr_spans.forEach((r) => regions.push({...r, kind: "qwen"}));
       }
@@ -479,7 +548,7 @@
       const regions = allRegions(s);
       regions.forEach((region) => {
         const [x1, y1, x2, y2] = region.bbox;
-        const key = `${region.kind}:${region.id}`;
+        const key = `${region.kind}:${region.source_label || ""}:${region.id}`;
         const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
         group.setAttribute("class", `${region.kind} ${state.selectedKey === key ? "selected" : ""}`);
         const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
@@ -487,6 +556,10 @@
         rect.setAttribute("y", y1);
         rect.setAttribute("width", x2 - x1);
         rect.setAttribute("height", y2 - y1);
+        if (region.color) {
+          rect.setAttribute("stroke", region.color);
+          rect.setAttribute("fill", region.color);
+        }
         rect.addEventListener("click", () => {
           state.selectedKey = key;
           renderDetails();
@@ -498,6 +571,7 @@
           text.setAttribute("x", x1 + 3);
           text.setAttribute("y", Math.max(16, y1 - 4));
           text.textContent = region.id;
+          if (region.color) text.setAttribute("fill", region.color);
           group.appendChild(text);
         }
         overlay.appendChild(group);
@@ -507,7 +581,7 @@
     function renderDetails() {
       const s = sample();
       const regions = allRegions(s);
-      const selected = regions.find((r) => `${r.kind}:${r.id}` === state.selectedKey);
+      const selected = regions.find((r) => `${r.kind}:${r.source_label || ""}:${r.id}` === state.selectedKey);
       selectedInfo.innerHTML = regionInfo(selected);
       el("sampleTitle").textContent = `${s.sample_id} · ${s.image_name || ""}`;
       const verdictClass = String(s.verdict || "").toLowerCase();
@@ -517,13 +591,15 @@
         `<span class="badge">risk ${s.risk_score ?? ""}</span>`,
         `<span class="badge">${s.width} x ${s.height}</span>`,
         `<span class="badge">${escapeHtml(s.document_language || "unknown")}</span>`,
+        `<span class="badge">${escapeHtml(source().eval?.scores?.S_Fin_proxy ? `S_Fin ${source().eval.scores.S_Fin_proxy.toFixed(3)}` : "no eval")}</span>`,
         `<span class="badge">${escapeHtml(`${s.ocr_layout_model || "no qOCR"}${s.ocr_layout_api_mode ? " / " + s.ocr_layout_api_mode : ""}${s.ocr_layout_task ? " / " + s.ocr_layout_task : ""}`)}</span>`,
         `<span class="badge">${escapeHtml(s.layout_model || "layout model unknown")}</span>`,
         `<span class="badge">${escapeHtml(s.ocr_transcript_model || "no OCR cache")}</span>`
       ].join("");
+      renderCompareTable();
       el("transcript").textContent = s.transcript || "";
       qwenSpanTable.innerHTML = s.qwen_ocr_spans.map((span) => {
-        const key = `qwen:${span.id}`;
+        const key = `qwen::${span.id}`;
         return `<tr class="qwen-row ${state.selectedKey === key ? "active" : ""}" data-key="${key}">
           <td>${escapeHtml(span.id)}</td>
           <td class="coord">${boxText(span.bbox)}</td>
@@ -538,7 +614,7 @@
         });
       });
       spanTable.innerHTML = s.ocr_spans.map((span) => {
-        const key = `ocr:${span.id}`;
+        const key = `ocr::${span.id}`;
         return `<tr class="${state.selectedKey === key ? "active" : ""}" data-key="${key}">
           <td>${escapeHtml(span.id)}</td>
           <td class="coord">${boxText(span.bbox)}</td>
@@ -560,6 +636,38 @@
         maskImage.removeAttribute("src");
         maskImage.style.display = "none";
       }
+    }
+
+    function fmtMetric(value) {
+      if (typeof value !== "number") return "";
+      return value.toFixed(3);
+    }
+
+    function renderCompareTable() {
+      compareTable.innerHTML = state.data.sources.map((src) => {
+        const s = sampleForSource(src);
+        const scores = src.eval?.scores || {};
+        const ev = s?.eval || {};
+        const active = src.label === state.sourceLabel ? "active" : "";
+        const verdict = s?.verdict || ev.pred_label || "";
+        const issues = (ev.issues || []).join(", ");
+        const boxes = s ? `${s.final_grounding_boxes.length}/${ev.gt_boxes ?? s.gt_boxes.length}` : "";
+        return `<tr class="${active}" data-source="${escapeHtml(src.label)}">
+          <td><span class="swatch" style="background:${sourceColor(src.label)}"></span>${escapeHtml(src.label)}</td>
+          <td class="metric">${escapeHtml(fmtMetric(scores.S_Fin_proxy))}</td>
+          <td>${escapeHtml(verdict)}${ev.det_correct === false ? " !" : ""}</td>
+          <td class="metric">${escapeHtml(boxes)}</td>
+          <td class="issues">${escapeHtml(issues)}</td>
+        </tr>`;
+      }).join("");
+      compareTable.querySelectorAll("tr").forEach((row) => {
+        row.addEventListener("click", () => {
+          state.sourceLabel = row.dataset.source;
+          sourceSelect.value = state.sourceLabel;
+          state.selectedKey = "";
+          render();
+        });
+      });
     }
 
     function render() {
@@ -607,6 +715,12 @@
     el("toggleFinal").addEventListener("click", () => {
       state.showFinal = !state.showFinal;
       el("toggleFinal").classList.toggle("active", state.showFinal);
+      state.selectedKey = "";
+      render();
+    });
+    el("toggleCompare").addEventListener("click", () => {
+      state.showCompare = !state.showCompare;
+      el("toggleCompare").classList.toggle("active", state.showCompare);
       state.selectedKey = "";
       render();
     });

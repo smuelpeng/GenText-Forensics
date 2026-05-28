@@ -161,18 +161,11 @@ MAX_SAMPLES=60 NUM_WORKERS=8 ./run_api_debug.sh
 查看 OCR/Layout 坐标和 grounding 坐标：
 
 ```bash
-python3 scripts/build_ocr_viewer_data.py \
-  --raw-jsonl v9=outputs/raw/staged_cct_v9_offline_benign_reviewer_60.jsonl \
-  --raw-jsonl v15=outputs/raw/staged_cct_v15_qwen_ocr_primary_stage1only_60.jsonl \
-  --raw-jsonl v13-box-graft=outputs/raw/staged_cct_v13_ocr_boxes_on_v9_60.jsonl \
-  --gt-jsonl data/val_300.jsonl \
-  --cache-model qwen-vl-ocr \
-  --ocr-layout-model qwen-vl-ocr \
-  --output outputs/ocr_viewer/data.json
+PYTHON=.venv/bin/python scripts/build_multi_result_viewer.sh
 python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
-然后打开 `http://127.0.0.1:8765/tools/ocr_viewer/`。页面中的 `Qwen OCR` 是独立 OCR layout cache；`VLM layout` 是 staged Stage-1 输出，不再混称为 OCR。该页面会把模型常见的 `0-1000` OCR/Layout 坐标投影到原图像素坐标；GT report boxes 和 mask 只作为本地诊断 overlay，不会进入模型 prompt。
+然后打开 `http://127.0.0.1:8765/tools/ocr_viewer/`。页面中的 `Qwen OCR` 是独立 OCR layout cache；`VLM layout` 是 staged Stage-1 输出，不再混称为 OCR。`Version Comparison` 表会横向列出 v9/v13/v16/v17/v18/v19 等已有结果的指标、判定、框数量和样本级 issue；`All final boxes` 可以把多个版本的最终定位框同时叠加到同一张图上。该页面会把模型常见的 `0-1000` OCR/Layout 坐标投影到原图像素坐标；GT report boxes 和 mask 只作为本地诊断 overlay，不会进入模型 prompt。
 
 推理结果会写到：
 
