@@ -17,6 +17,7 @@
       --green: #168056;
       --violet: #8a46c8;
       --cyan: #008199;
+      --cyan-bg: #ecfbfd;
     }
     * { box-sizing: border-box; }
     body {
@@ -241,6 +242,17 @@
       line-height: 1.45;
       background: #fbfcfd;
     }
+    .region-card {
+      display: grid;
+      gap: 8px;
+    }
+    .table-wrap {
+      max-height: 260px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -254,6 +266,7 @@
     }
     th { color: var(--muted); font-weight: 600; }
     tr.active { background: #fff7e5; }
+    .qwen-row.active { background: var(--cyan-bg); }
     .coord {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       white-space: nowrap;
@@ -314,12 +327,23 @@
           <h2>OCR Transcript</h2>
           <div id="transcript" class="text-box"></div>
         </div>
-        <div>
+        <div class="region-card">
+          <h2>Qwen OCR Spans</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>ID</th><th>Box</th><th>Text</th></tr></thead>
+              <tbody id="qwenSpanTable"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="region-card">
           <h2>VLM Layout Spans</h2>
-          <table>
-            <thead><tr><th>ID</th><th>Box</th><th>Text</th></tr></thead>
-            <tbody id="spanTable"></tbody>
-          </table>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>ID</th><th>Box</th><th>Text</th></tr></thead>
+              <tbody id="spanTable"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>
@@ -349,6 +373,7 @@
     const maskImage = el("maskImage");
     const overlay = el("overlay");
     const selectedInfo = el("selectedInfo");
+    const qwenSpanTable = el("qwenSpanTable");
     const spanTable = el("spanTable");
 
     function source() {
@@ -420,6 +445,7 @@
         ["Box", boxText(region.bbox)],
         ["Raw Box", region.raw_bbox ? boxText(region.raw_bbox) : ""],
         ["Coord", region.coord_space || "pixel"],
+        ["Format", region.detected_box_format || ""],
         ["Role", region.role || ""],
         ["Confidence", region.confidence ?? ""],
         ["Text", region.text || ""]
@@ -491,10 +517,26 @@
         `<span class="badge">risk ${s.risk_score ?? ""}</span>`,
         `<span class="badge">${s.width} x ${s.height}</span>`,
         `<span class="badge">${escapeHtml(s.document_language || "unknown")}</span>`,
+        `<span class="badge">${escapeHtml(`${s.ocr_layout_model || "no qOCR"}${s.ocr_layout_api_mode ? " / " + s.ocr_layout_api_mode : ""}${s.ocr_layout_task ? " / " + s.ocr_layout_task : ""}`)}</span>`,
         `<span class="badge">${escapeHtml(s.layout_model || "layout model unknown")}</span>`,
         `<span class="badge">${escapeHtml(s.ocr_transcript_model || "no OCR cache")}</span>`
       ].join("");
       el("transcript").textContent = s.transcript || "";
+      qwenSpanTable.innerHTML = s.qwen_ocr_spans.map((span) => {
+        const key = `qwen:${span.id}`;
+        return `<tr class="qwen-row ${state.selectedKey === key ? "active" : ""}" data-key="${key}">
+          <td>${escapeHtml(span.id)}</td>
+          <td class="coord">${boxText(span.bbox)}</td>
+          <td>${escapeHtml(span.text)}</td>
+        </tr>`;
+      }).join("");
+      qwenSpanTable.querySelectorAll("tr").forEach((row) => {
+        row.addEventListener("click", () => {
+          state.selectedKey = row.dataset.key;
+          renderDetails();
+          drawOverlay();
+        });
+      });
       spanTable.innerHTML = s.ocr_spans.map((span) => {
         const key = `ocr:${span.id}`;
         return `<tr class="${state.selectedKey === key ? "active" : ""}" data-key="${key}">
@@ -585,7 +627,7 @@
       drawOverlay();
     });
 
-    fetch("/outputs/ocr_viewer/data.json")
+    fetch(`/outputs/ocr_viewer/data.json?ts=${Date.now()}`)
       .then((r) => r.json())
       .then((data) => {
         state.data = data;

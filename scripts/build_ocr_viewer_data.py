@@ -149,14 +149,14 @@ def load_cache_text(cache_dir: Path, model: str, key: str) -> str:
     return str(data.get("text") or data.get("raw") or "")
 
 
-def load_ocr_layout_spans(cache_dir: Path, model: str, key: str) -> list[dict[str, Any]]:
+def load_ocr_layout(cache_dir: Path, model: str, key: str) -> dict[str, Any]:
     path = cache_dir / safe_cache_name(model) / f"{safe_cache_name(key)}.json"
     if not path.exists():
-        return []
+        return {"spans": [], "model": model, "api_mode": "", "ocr_task": "", "cache_path": ""}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return []
+        return {"spans": [], "model": model, "api_mode": "json_error", "ocr_task": "", "cache_path": str(path)}
     spans: list[dict[str, Any]] = []
     for idx, span in enumerate(((data.get("parsed") or {}).get("text_spans") or []), start=1):
         if not isinstance(span, dict):
@@ -176,7 +176,15 @@ def load_ocr_layout_spans(cache_dir: Path, model: str, key: str) -> list[dict[st
                 "detected_box_format": span.get("detected_box_format"),
             }
         )
-    return spans
+    return {
+        "spans": spans,
+        "model": str(data.get("model") or model),
+        "api_mode": str(data.get("api_mode") or "openai-prompt"),
+        "ocr_task": str(data.get("ocr_task") or ""),
+        "cache_path": str(path),
+        "raw_line_count": (data.get("parsed") or {}).get("raw_line_count"),
+        "usage": data.get("usage") or {},
+    }
 
 
 def load_gt_rows(gt_jsonl: Path | None) -> dict[str, dict[str, Any]]:
@@ -264,7 +272,8 @@ def build_source(
         invalid_spans += len(ocr_layout.get("text_spans") or []) - len(raw_spans)
         transcript_stage = stage_outputs.get("ocr_transcript") or {}
         transcript = str(transcript_stage.get("text") or "") or load_cache_text(cache_dir, cache_model, key)
-        qwen_ocr_spans = load_ocr_layout_spans(layout_cache_dir, layout_cache_model, key)
+        qwen_ocr = load_ocr_layout(layout_cache_dir, layout_cache_model, key)
+        qwen_ocr_spans = qwen_ocr["spans"]
         report_raw = str((stage_outputs.get("report") or {}).get("raw") or rec.get("raw_output") or "")
         final_report = str(rec.get("raw_output") or "")
         gt_row = gt_rows.get(key) or gt_rows.get(Path(str(rec.get("image_name") or "")).stem) or {}
@@ -289,6 +298,12 @@ def build_source(
             "layout_model": (stage_outputs.get("ocr_layout") or {}).get("model"),
             "ocr_transcript_model": transcript_stage.get("model") or cache_model,
             "ocr_cache_hit": transcript_stage.get("cache_hit"),
+            "ocr_layout_model": qwen_ocr.get("model") or layout_cache_model,
+            "ocr_layout_api_mode": qwen_ocr.get("api_mode") or "",
+            "ocr_layout_task": qwen_ocr.get("ocr_task") or "",
+            "ocr_layout_cache_path": qwen_ocr.get("cache_path") or "",
+            "ocr_layout_raw_line_count": qwen_ocr.get("raw_line_count"),
+            "ocr_layout_usage": qwen_ocr.get("usage") or {},
             "transcript": transcript,
             "qwen_ocr_spans": qwen_ocr_spans,
             "ocr_spans": spans,
