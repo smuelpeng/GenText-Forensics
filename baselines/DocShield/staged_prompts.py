@@ -31,7 +31,7 @@ SYSTEM_PROMPT = (
 
 
 def _json_dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, indent=2)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _taxonomy_block(stage_focus: str, enabled: bool) -> str:
@@ -52,6 +52,30 @@ Use this transcript only as a text-reading aid. It may contain OCR errors,
 missing line breaks, or merged table cells. Spatial boxes must still come from
 the image itself, and OCR-only oddities are not evidence of forgery by
 themselves.
+"""
+
+
+def _auxiliary_ocr_layout_block(auxiliary_ocr_layout: dict[str, Any] | None) -> str:
+    layout = auxiliary_ocr_layout or {}
+    spans = layout.get("text_spans") or []
+    if not spans:
+        return ""
+    return f"""
+Auxiliary OCR text boxes from a dedicated OCR model:
+{_json_dumps({
+    "model": layout.get("model", ""),
+    "api_mode": layout.get("api_mode", ""),
+    "ocr_task": layout.get("ocr_task", ""),
+    "coordinate_system": layout.get("coordinate_system", "native_pixel"),
+    "box_format": layout.get("box_format", "xyxy"),
+    "span_count": layout.get("span_count", len(spans)),
+    "used_span_count": len(spans),
+    "text_spans": spans,
+})}
+
+Use these OCR boxes only as text-reading and coordinate anchors. Verify them
+against the image, correct obvious OCR errors when the pixels disagree, and do
+not treat OCR-only oddities as forgery evidence by themselves.
 """
 
 
@@ -107,6 +131,7 @@ def ocr_layout_prompt(
     height: int,
     taxonomy_enabled: bool = False,
     ocr_transcript: str | None = None,
+    auxiliary_ocr_layout: dict[str, Any] | None = None,
 ) -> str:
     critical_schema = ""
     critical_rule = ""
@@ -129,6 +154,7 @@ def ocr_layout_prompt(
 Image: {image_name}
 Native image size: width={width}, height={height}.
 {_ocr_transcript_block(ocr_transcript)}
+{_auxiliary_ocr_layout_block(auxiliary_ocr_layout)}
 {_taxonomy_block(STAGE1_FOCUS, taxonomy_enabled)}
 
 Return ONLY valid JSON. Do not wrap in Markdown.
@@ -153,6 +179,9 @@ Required JSON schema:
 Rules:
 - Use native image pixel coordinates, integers, ordered as x1<x2 and y1<y2.
 - Extract the most important text spans and suspicious-looking regions; do not invent text.
+- If auxiliary OCR boxes are provided and match the image, prefer their native
+  pixel boxes for text span coordinates. You may keep their q* IDs as span IDs
+  when useful for later grounding.
 - Keep field names in English, but values such as global_summary should follow the document language.
 - If text is unreadable, include the region with text="" and lower confidence.
 {critical_rule}
@@ -217,7 +246,9 @@ Required JSON schema:
 Rules:
 - Use only evidence visible in the image or derived from Stage 1 OCR/Layout.
 - If there is no concrete candidate, return empty arrays and authenticity_prior="authentic".
-- Every candidate must reference span_ids when text is involved.
+- Every candidate must reference Stage 1 span_ids when text is involved. If
+  Stage 1 preserved auxiliary OCR q* IDs as text_spans, those q* IDs may be
+  referenced.
 - Use native image pixel coordinates. Coordinates should cover the visible evidence region.
 {candidate_rule}
 """
@@ -290,7 +321,9 @@ Rules:
 - Logical contradictions that change document meaning, impossible dates, broken numbering, malformed names, garbled critical text, or inconsistent totals should usually survive validation even when visual artifacts are subtle.
 - Visual artifacts such as font/rendering mismatch, copy-paste boundaries, localized blur, color/edge inconsistency, or layout corruption should survive when they are localized.
 - If verdict is AUTHENTIC, validated_anomalies must be an empty array and risk_score must be 0-10.
-- If verdict is FORGED, every anomaly must keep source_candidate_ids or span_ids so the next grounding stage can map it to coordinates.
+- If verdict is FORGED, every anomaly must keep source_candidate_ids or span_ids
+  so the next grounding stage can map it to coordinates. If Stage 1 preserved
+  auxiliary OCR q* IDs as text_spans, those q* IDs may be referenced.
 {risk_rule}
 """
 
@@ -347,7 +380,8 @@ Required JSON schema:
 }}
 
 Rules:
-- Ground every Stage 3 anomaly by matching its span_ids/source_candidate_ids to Stage 1 OCR boxes and Stage 2 candidate boxes.
+- Ground every Stage 3 anomaly by matching its span_ids/source_candidate_ids to
+  Stage 1 OCR boxes, auxiliary_ocr_spans q* boxes, and Stage 2 candidate boxes.
 - Use the auxiliary OCR transcript only to identify the exact text span that should be grounded; do not introduce new anomalies, verdicts, or risk changes from OCR text alone.
 - Grounding must come from OCR span boxes, candidate boxes, or their tight union. Do not invent unrelated coordinates.
 - If an anomaly is logical but references text, ground the exact text span(s) that carry the contradiction.

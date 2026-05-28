@@ -417,6 +417,139 @@ def write_transcript_cache(cache_path: Path, data: dict[str, Any]) -> None:
     tmp_path.replace(cache_path)
 
 
+def ocr_layout_cache_path(cache_dir: Path, model: str, sample_key: str) -> Path:
+    return cache_dir / safe_cache_name(model) / f"{safe_cache_name(sample_key)}.json"
+
+
+def _compact_ocr_spans(
+    spans: list[dict[str, Any]],
+    *,
+    max_spans: int,
+    max_chars: int,
+) -> list[dict[str, Any]]:
+    compacted: list[dict[str, Any]] = []
+    used_chars = 0
+    for span in spans:
+        if max_spans > 0 and len(compacted) >= max_spans:
+            break
+        text = str(span.get("text") or "")
+        if max_chars > 0 and used_chars >= max_chars:
+            break
+        if max_chars > 0 and used_chars + len(text) > max_chars:
+            remaining = max(0, max_chars - used_chars)
+            text = text[:remaining].rstrip()
+            if text:
+                text += " ..."
+        used_chars += len(text)
+        compacted.append(
+            {
+                "id": str(span.get("id") or f"q{len(compacted) + 1}"),
+                "text": text,
+                "bbox": span.get("bbox"),
+                "role": span.get("role") or "qwen_ocr",
+                "confidence": span.get("confidence"),
+                "detected_box_format": span.get("detected_box_format") or "",
+            }
+        )
+    return compacted
+
+
+def read_ocr_layout_cache(
+    cache_dir: Path | None,
+    model: str | None,
+    sample_key: str,
+    width: int,
+    height: int,
+    *,
+    max_spans: int,
+    max_chars: int,
+) -> dict[str, Any]:
+    if not cache_dir or not model:
+        return {"cache_hit": False, "text_spans": []}
+    cache_path = ocr_layout_cache_path(cache_dir, model, sample_key)
+    if not cache_path.exists():
+        return {
+            "cache_hit": False,
+            "cache_path": str(cache_path),
+            "model": model,
+            "text_spans": [],
+        }
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "cache_hit": False,
+            "cache_path": str(cache_path),
+            "model": model,
+            "error": repr(exc),
+            "text_spans": [],
+        }
+
+    parsed = data.get("parsed") or {}
+    coordinate_system = str(parsed.get("coordinate_system") or "")
+    parsed_spans = parsed.get("text_spans") or []
+    spans: list[dict[str, Any]] = []
+    if isinstance(parsed_spans, list):
+        for idx, span in enumerate(parsed_spans, start=1):
+            if not isinstance(span, dict):
+                continue
+            raw_box = span.get("bbox")
+            if "native" in coordinate_system.lower() or coordinate_system == "":
+                bbox = normalize_bbox(raw_box, width, height)
+            else:
+                bbox = normalize_model_bbox(raw_box, width, height)
+            if not bbox:
+                continue
+            spans.append(
+                {
+                    "id": str(span.get("id") or f"q{idx}"),
+                    "text": str(span.get("text") or ""),
+                    "bbox": bbox,
+                    "role": span.get("role") or "qwen_ocr",
+                    "confidence": span.get("confidence"),
+                    "detected_box_format": span.get("detected_box_format") or "",
+                }
+            )
+    compacted = _compact_ocr_spans(spans, max_spans=max_spans, max_chars=max_chars)
+    text = compact_text(" ".join(str(span.get("text") or "") for span in compacted), max_chars)
+    return {
+        "cache_hit": True,
+        "cache_path": str(cache_path),
+        "model": str(data.get("model") or model),
+        "api_mode": str(data.get("api_mode") or ""),
+        "ocr_task": str(data.get("ocr_task") or ""),
+        "coordinate_system": "native_pixel",
+        "box_format": "xyxy",
+        "span_count": len(spans),
+        "used_span_count": len(compacted),
+        "raw_line_count": (data.get("parsed") or {}).get("raw_line_count"),
+        "text": text,
+        "text_spans": compacted,
+        "usage": data.get("usage") or {},
+    }
+
+
+def attach_auxiliary_ocr_layout(
+    ocr_layout: dict[str, Any] | None,
+    auxiliary_ocr_layout: dict[str, Any] | None,
+) -> dict[str, Any]:
+    layout = dict(ocr_layout or {})
+    spans = (auxiliary_ocr_layout or {}).get("text_spans") or []
+    if not spans:
+        return layout
+    layout["auxiliary_ocr_metadata"] = {
+        "model": auxiliary_ocr_layout.get("model"),
+        "api_mode": auxiliary_ocr_layout.get("api_mode"),
+        "ocr_task": auxiliary_ocr_layout.get("ocr_task"),
+        "cache_hit": auxiliary_ocr_layout.get("cache_hit"),
+        "cache_path": auxiliary_ocr_layout.get("cache_path"),
+        "span_count": auxiliary_ocr_layout.get("span_count"),
+        "used_span_count": auxiliary_ocr_layout.get("used_span_count", len(spans)),
+    }
+    layout["auxiliary_ocr_spans"] = spans
+    return layout
+
+
 def raw_bbox(value: Any) -> list[float] | None:
     if not isinstance(value, list) or len(value) < 4:
         return None
@@ -668,18 +801,25 @@ def forged_threshold_for_language(
 
 
 def collect_spans(ocr_layout: dict[str, Any], width: int, height: int) -> dict[str, list[int]]:
-    raw_entries: list[tuple[str, list[float]]] = []
     spans: dict[str, list[int]] = {}
+    model_entries: list[tuple[str, list[float]]] = []
     for span in ocr_layout.get("text_spans") or []:
         if not isinstance(span, dict):
             continue
         span_id = str(span.get("id") or "")
         bbox = raw_bbox(span.get("bbox"))
         if span_id and bbox:
-            raw_entries.append((span_id, bbox))
-    coord_space = detect_bbox_space([bbox for _, bbox in raw_entries], width, height, model_like=True)
-    for span_id, raw in raw_entries:
+            model_entries.append((span_id, bbox))
+    coord_space = detect_bbox_space([bbox for _, bbox in model_entries], width, height, model_like=True)
+    for span_id, raw in model_entries:
         bbox = project_bbox(raw, width, height, coord_space)
+        if span_id and bbox:
+            spans[span_id] = bbox
+    for span in ocr_layout.get("auxiliary_ocr_spans") or []:
+        if not isinstance(span, dict):
+            continue
+        span_id = str(span.get("id") or "")
+        bbox = normalize_bbox(span.get("bbox"), width, height)
         if span_id and bbox:
             spans[span_id] = bbox
     return spans
@@ -971,6 +1111,12 @@ def process_row(
     ocr_transcript_cache_dir: Path | None,
     ocr_transcript_to_evidence: bool,
     ocr_transcript_to_grounding: bool,
+    ocr_layout_cache_model: str | None,
+    ocr_layout_cache_dir: Path | None,
+    ocr_layout_max_spans: int,
+    ocr_layout_max_chars: int,
+    require_ocr_layout_cache: bool,
+    ocr_layout_to_stage1: bool,
     grounding_box_scale_x: float,
     grounding_box_scale_y: float,
     benign_reviewer_enabled: bool,
@@ -994,9 +1140,25 @@ def process_row(
         stage_outputs: dict[str, Any] = {}
         stage_usages: dict[str, Any] = {}
         ocr_transcript = ""
+        cache_key = str(sample_id or image_name)
+        auxiliary_ocr_layout = read_ocr_layout_cache(
+            ocr_layout_cache_dir,
+            ocr_layout_cache_model,
+            cache_key,
+            width,
+            height,
+            max_spans=ocr_layout_max_spans,
+            max_chars=ocr_layout_max_chars,
+        )
+        if require_ocr_layout_cache and ocr_layout_cache_model and not auxiliary_ocr_layout.get("cache_hit"):
+            raise RuntimeError(
+                f"Missing required OCR layout cache for {cache_key}: "
+                f"{auxiliary_ocr_layout.get('cache_path', '')}"
+            )
+        if ocr_layout_cache_model:
+            stage_outputs["qwen_ocr_layout"] = auxiliary_ocr_layout
 
         if ocr_transcript_model:
-            cache_key = str(sample_id or image_name)
             cache_path = (
                 transcript_cache_path(ocr_transcript_cache_dir, ocr_transcript_model, cache_key)
                 if ocr_transcript_cache_dir
@@ -1047,6 +1209,7 @@ def process_row(
                 height,
                 taxonomy_enabled=taxonomy_prompts,
                 ocr_transcript=ocr_transcript,
+                auxiliary_ocr_layout=auxiliary_ocr_layout if ocr_layout_to_stage1 else {},
             ),
             image_path=image_path,
             model=ocr_model or model,
@@ -1056,13 +1219,15 @@ def process_row(
             enable_thinking=enable_thinking,
             timeout=timeout,
         )
-        stage_outputs["ocr_layout"] = {"raw": ocr_raw, "parsed": ocr_layout, "model": ocr_model or model}
+        ocr_layout_reasoning = ocr_layout or {}
+        ocr_layout_grounding = attach_auxiliary_ocr_layout(ocr_layout_reasoning, auxiliary_ocr_layout)
+        stage_outputs["ocr_layout"] = {"raw": ocr_raw, "parsed": ocr_layout_grounding, "model": ocr_model or model}
         stage_usages["ocr_layout"] = usage
 
         evidence_raw, usage, evidence = run_stage(
             stage_name="evidence",
             prompt=evidence_prompt(
-                ocr_layout or {},
+                ocr_layout_reasoning,
                 str(image_name),
                 width,
                 height,
@@ -1083,7 +1248,7 @@ def process_row(
         validation_raw, usage, validation = run_stage(
             stage_name="validation",
             prompt=validation_prompt(
-                ocr_layout or {},
+                ocr_layout_reasoning,
                 evidence or {},
                 str(image_name),
                 width,
@@ -1107,7 +1272,7 @@ def process_row(
         grounding_raw, usage, grounding = run_stage(
             stage_name="grounding",
             prompt=grounding_prompt(
-                ocr_layout or {},
+                ocr_layout_grounding,
                 evidence or {},
                 validation or {},
                 str(image_name),
@@ -1128,7 +1293,7 @@ def process_row(
         if validation:
             grounding_for_normalize["verdict"] = validation.get("verdict")
             grounding_for_normalize["risk_score"] = validation.get("risk_score")
-        normalized_validation = normalize_validated(grounding_for_normalize, ocr_layout or {}, evidence or {}, width, height)
+        normalized_validation = normalize_validated(grounding_for_normalize, ocr_layout_grounding, evidence or {}, width, height)
         stage_outputs["grounding"] = {
             "raw": grounding_raw,
             "parsed": grounding,
@@ -1144,7 +1309,7 @@ def process_row(
         report_raw, usage, _ = run_stage(
             stage_name="report",
             prompt=report_prompt(
-                ocr_layout or {},
+                ocr_layout_reasoning,
                 normalized_validation,
                 str(image_name),
                 width,
@@ -1162,23 +1327,23 @@ def process_row(
         final_report = ensure_report_structure(report_raw)
         parsed_report = parse_cct_report(final_report)
         applied_risk_threshold, document_language = forged_threshold_for_language(
-            ocr_layout,
+            ocr_layout_reasoning,
             forged_risk_threshold,
             language_risk_thresholds,
         )
         if parsed_report.get("conclusion") == "UNKNOWN":
-            final_report = ensure_report_structure(fallback_report(ocr_layout or {}, normalized_validation))
+            final_report = ensure_report_structure(fallback_report(ocr_layout_reasoning, normalized_validation))
             parsed_report = parse_cct_report(final_report)
         if (
             parsed_report.get("conclusion") == "FORGED"
             and parsed_report.get("risk_score") is not None
             and int(parsed_report.get("risk_score") or 0) < applied_risk_threshold
         ):
-            final_report = ensure_report_structure(authentic_downgrade_report(ocr_layout or {}))
+            final_report = ensure_report_structure(authentic_downgrade_report(ocr_layout_reasoning))
             parsed_report = parse_cct_report(final_report)
         final_report, benign_review = benign_error_review_report(
             final_report,
-            ocr_layout or {},
+            ocr_layout_reasoning,
             enabled=benign_reviewer_enabled,
             max_risk=benign_reviewer_max_risk,
             min_benign_hits=benign_reviewer_min_hits,
@@ -1209,6 +1374,12 @@ def process_row(
             "ocr_transcript_cache_dir": str(ocr_transcript_cache_dir) if ocr_transcript_cache_dir else "",
             "ocr_transcript_to_evidence": ocr_transcript_to_evidence,
             "ocr_transcript_to_grounding": ocr_transcript_to_grounding,
+            "ocr_layout_cache_model": ocr_layout_cache_model,
+            "ocr_layout_cache_dir": str(ocr_layout_cache_dir) if ocr_layout_cache_dir else "",
+            "ocr_layout_max_spans": ocr_layout_max_spans,
+            "ocr_layout_max_chars": ocr_layout_max_chars,
+            "require_ocr_layout_cache": require_ocr_layout_cache,
+            "ocr_layout_to_stage1": ocr_layout_to_stage1,
         }
         stage_outputs["benign_reviewer"] = benign_review
         stage_usages["report"] = usage
@@ -1299,6 +1470,34 @@ def parse_args() -> argparse.Namespace:
         default="outputs/cache/ocr_transcripts",
         help="Cache directory for OCR transcript API responses. Set empty to disable.",
     )
+    p.add_argument(
+        "--ocr-layout-cache-model",
+        default="qwen-vl-ocr",
+        help=(
+            "Dedicated OCR layout cache model whose text boxes are injected as auxiliary "
+            "perception anchors, e.g. qwen-vl-ocr. Set empty to disable."
+        ),
+    )
+    p.add_argument(
+        "--ocr-layout-cache-dir",
+        default="outputs/cache/ocr_layouts",
+        help="Cache directory for dedicated OCR layout boxes. No online OCR calls are made by this runner.",
+    )
+    p.add_argument("--ocr-layout-max-spans", type=int, default=0, help="0 = use all cached OCR spans.")
+    p.add_argument("--ocr-layout-max-chars", type=int, default=16000)
+    p.add_argument(
+        "--require-ocr-layout-cache",
+        action="store_true",
+        help="Fail a row if --ocr-layout-cache-model is enabled but its cached OCR boxes are missing.",
+    )
+    p.add_argument(
+        "--ocr-layout-to-stage1",
+        action="store_true",
+        help=(
+            "Also inject full cached OCR boxes into the Stage 1 prompt. Off by default; "
+            "the default path uses OCR boxes only for grounding/normalization."
+        ),
+    )
     p.add_argument("--input-jsonl", default="data/val_300.jsonl")
     p.add_argument("--output-jsonl", default="outputs/raw/staged_docshield_api_val_60.jsonl")
     p.add_argument("--api-key-file", default="/Users/penpen/Desktop/api-key.txt")
@@ -1340,6 +1539,11 @@ def main() -> None:
     ocr_transcript_cache_dir = (
         resolve_repo_path(args.ocr_transcript_cache_dir)
         if args.ocr_transcript_cache_dir and args.ocr_transcript_model
+        else None
+    )
+    ocr_layout_cache_dir = (
+        resolve_repo_path(args.ocr_layout_cache_dir)
+        if args.ocr_layout_cache_dir and args.ocr_layout_cache_model
         else None
     )
     try:
@@ -1384,6 +1588,7 @@ def main() -> None:
     print(
         f"[run_staged_docshield_api] model={args.model} rows={len(filtered)} "
         f"ocr_model={args.ocr_model or 'same'} ocr_transcript_model={args.ocr_transcript_model or 'off'} "
+        f"ocr_layout_cache_model={args.ocr_layout_cache_model or 'off'} "
         f"workers={args.num_workers} thinking={args.enable_thinking} "
         f"default_threshold={args.forged_risk_threshold} lang_thresholds={language_risk_thresholds} "
         f"benign_reviewer={not args.disable_benign_reviewer} taxonomy_prompts={args.enable_taxonomy_prompts}"
@@ -1410,6 +1615,12 @@ def main() -> None:
         "ocr_transcript_cache_dir": ocr_transcript_cache_dir,
         "ocr_transcript_to_evidence": args.ocr_transcript_to_evidence,
         "ocr_transcript_to_grounding": args.ocr_transcript_to_grounding,
+        "ocr_layout_cache_model": args.ocr_layout_cache_model or None,
+        "ocr_layout_cache_dir": ocr_layout_cache_dir,
+        "ocr_layout_max_spans": args.ocr_layout_max_spans,
+        "ocr_layout_max_chars": args.ocr_layout_max_chars,
+        "require_ocr_layout_cache": args.require_ocr_layout_cache,
+        "ocr_layout_to_stage1": args.ocr_layout_to_stage1,
         "grounding_box_scale_x": args.grounding_box_scale_x,
         "grounding_box_scale_y": args.grounding_box_scale_y,
         "benign_reviewer_enabled": not args.disable_benign_reviewer,

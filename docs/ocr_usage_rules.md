@@ -34,9 +34,14 @@ DocShield/CCT baseline.
 - OCR-only oddities are not forgery evidence by themselves; later stages must
   verify them against image-visible cues, layout/cross-cue context, or logical
   contradictions.
-- By default, the full OCR transcript is injected only into Stage 1 OCR/Layout.
-  Stage 2 evidence extraction and Stage 4 grounding do not receive raw OCR text
-  unless an explicit ablation flag is enabled.
+- By default, native Qwen-OCR layout boxes are used during grounding and
+  deterministic box normalization as `auxiliary_ocr_spans`, but they do not enter
+  Stage 1/2/3 judgement prompts. Use `OCR_LAYOUT_TO_STAGE1=1` only as an
+  explicit ablation. Current 60-sample evidence shows full Stage-1 OCR injection
+  increases false positives.
+- The separate full OCR transcript path is disabled by default. Stage 2 evidence
+  extraction and Stage 4 grounding do not receive raw transcript text unless an
+  explicit ablation flag is enabled.
 - Do not pass raw OCR text directly into evidence extraction unless running an
   explicit ablation, because OCR-only text noise can over-trigger forged
   decisions.
@@ -50,6 +55,9 @@ DocShield/CCT baseline.
   `outputs/cache/ocr_layouts/<model>/` and compared by model before using them
   for grounding. The default coordinate cache command should include
   `--api-mode dashscope-native --ocr-task advanced_recognition`.
+- The staged CCT runner reads this cache only; it should not call OCR online
+  during main CCT inference. Use `REQUIRE_OCR_LAYOUT_CACHE=1` when running
+  experiments that require every selected sample to have cached OCR boxes.
 - Use the online OCR call path only for smoke tests, small ablations, and cache
   misses.
 - For rebuilding all 300 OCR results, prefer a cheaper batch/offline Qwen-OCR

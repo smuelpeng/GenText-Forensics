@@ -98,28 +98,19 @@ MAX_SAMPLES=3 ./run_api_debug.sh
 - API key：`/Users/penpen/Desktop/api-key.txt`
 - forged 默认风险阈值：`80`，可用 `FORGED_RISK_THRESHOLD` 覆盖
 - Stage-1 语言感知风险阈值：`ar=70,id=75`，可用 `FORGED_RISK_THRESHOLDS` 覆盖；空字符串表示只使用默认阈值
-- OCR 辅助模型：默认关闭；建议使用 `OCR_TRANSCRIPT_MODEL=qwen-vl-ocr`，只把 Qwen-OCR 作为文字/坐标辅助，不让它承担逻辑推理、验证或最终判断
+- OCR layout 辅助：默认读取 `OCR_LAYOUT_CACHE_MODEL=qwen-vl-ocr` 的 native DashScope OCR cache，把文字框作为 CCT 的感知锚点；该 runner 不会在线调用 OCR，缺 cache 时只记录 cache miss
+- OCR transcript 辅助模型：默认关闭；只在消融时使用 `OCR_TRANSCRIPT_MODEL=qwen-vl-ocr`，不让它承担逻辑推理、验证或最终判断
 - 当前第一版 API key 已实测可调用 `qwen-vl-ocr`；`qwen-vl-ocr-latest` 仍会返回 `Model.AccessDenied`，不要作为默认模型
 - OCR API key：默认复用 `API_KEY_FILE=/Users/penpen/Desktop/api-key.txt`；`OCR_TRANSCRIPT_API_KEY_FILE` 只作为受控消融覆盖项，正常运行不要设置
-- OCR cache：默认 `outputs/cache/ocr_transcripts/`；固定测试集应先缓存 OCR，避免反复调用。重建 300 张 OCR 时，优先考虑百炼 batch/offline OCR 以降低成本
-- OCR transcript 注入范围：默认只注入 Stage-1 OCR/Layout，帮助主 VLM 读文字和组织坐标；不直接注入 Stage-2 evidence 或 Stage-4 grounding，避免 OCR-only 噪声触发误判。可用 `OCR_TRANSCRIPT_TO_EVIDENCE=1` 或 `OCR_TRANSCRIPT_TO_GROUNDING=1` 做消融
+- OCR layout cache：默认 `outputs/cache/ocr_layouts/qwen-vl-ocr/`；固定测试集应先缓存 300 张 native OCR boxes，避免 staged CCT 运行时重复调用 OCR。可用 `REQUIRE_OCR_LAYOUT_CACHE=1` 强制缺 cache 即失败
+- OCR transcript 注入范围：默认关闭 transcript；native OCR layout 默认只在 grounding/normalization 阶段作为 `auxiliary_ocr_spans` 定位锚点使用，不进入 Stage-1/2/3 的判别链。可用 `OCR_LAYOUT_TO_STAGE1=1` 做 Stage-1 OCR 注入消融，但当前 60 样本结果显示它会增加假阳性
 - Stage-1 OCR 模型替换：`OCR_MODEL` 仅用于消融，不建议用 Qwen-OCR 直接替换主 Stage-1；此前 60 样本实验显示它会显著增加假阳性
 - 坐标归一：模型阶段输出若被检测为常见的 `0-1000` 视觉坐标，会先投影到原图像素坐标，再进入 grounding/report 后处理
 - grounding box 扩张：默认 `GROUNDING_BOX_SCALE_X=3.5`、`GROUNDING_BOX_SCALE_Y=4.0`，用于把模型偏紧的异常中心框扩展到更接近文本区域的定位框
 - benign-error reviewer：默认开启。只在单个异常、低复杂度、解释主要来自 OCR/扫描/字体/排版等生产性瑕疵且缺少强篡改信号时，把低质量 forged 报告降级为 authentic。可用 `DISABLE_BENIGN_REVIEWER=1` 做消融。
 - taxonomy prompt：默认关闭。`docs/forgery_taxonomy.md` 总结了 GT 聚合诊断得到的伪造/误判范式，可用 `ENABLE_TAXONOMY_PROMPTS=1` 作为实验开关注入各阶段 prompt；当前 60 样本消融低于默认 v9，因此不作为默认路径。
 
-OCR 使用规则见 `docs/ocr_usage_rules.md`。预热 OCR cache：
-
-```bash
-.venv/bin/python baselines/DocShield/cache_ocr_transcripts.py \
-  --input-jsonl data/val_300.jsonl \
-  --model qwen-vl-ocr \
-  --api-key-file /Users/penpen/Desktop/api-key.txt \
-  --num-workers 8
-```
-
-如果要检查 Qwen-OCR 的坐标质量，单独预热 layout cache。这个 cache 只保存 OCR 文本框，不读取 label、GT report、mask，也不做逻辑推理：
+OCR 使用规则见 `docs/ocr_usage_rules.md`。默认先预热 native layout cache，供 CCT 使用：
 
 ```bash
 .venv/bin/python baselines/DocShield/cache_ocr_layouts.py \
@@ -131,13 +122,24 @@ OCR 使用规则见 `docs/ocr_usage_rules.md`。预热 OCR cache：
   --num-workers 8
 ```
 
-Qwen-OCR 坐标应优先使用 DashScope 原生 `advanced_recognition` 任务。该路径会返回官方 `ocr_result.words_info`，包含文字、四点 `location` 和 `rotate_rect`；脚本会转换成原图像素 `xyxy` 后再给 viewer 使用。`openai-prompt` 模式只作为消融和兼容路径，不作为 `qwen-vl-ocr` 坐标默认调用方式。
+可选预热 transcript cache，只用于 transcript 消融：
 
-使用已缓存 OCR transcript 跑 staged pipeline：
+```bash
+.venv/bin/python baselines/DocShield/cache_ocr_transcripts.py \
+  --input-jsonl data/val_300.jsonl \
+  --model qwen-vl-ocr \
+  --api-key-file /Users/penpen/Desktop/api-key.txt \
+  --num-workers 8
+```
+
+Qwen-OCR layout cache 只保存 OCR 文本框，不读取 label、GT report、mask，也不做逻辑推理。坐标应优先使用 DashScope 原生 `advanced_recognition` 任务。该路径会返回官方 `ocr_result.words_info`，包含文字、四点 `location` 和 `rotate_rect`；脚本会转换成原图像素 `xyxy` 后再给 viewer 和 CCT 使用。`openai-prompt` 模式只作为消融和兼容路径，不作为 `qwen-vl-ocr` 坐标默认调用方式。
+
+使用已缓存 native OCR layout 跑 staged pipeline：
 
 ```bash
 API_KEY_FILE=/Users/penpen/Desktop/api-key.txt \
-OCR_TRANSCRIPT_MODEL=qwen-vl-ocr \
+OCR_LAYOUT_CACHE_MODEL=qwen-vl-ocr \
+REQUIRE_OCR_LAYOUT_CACHE=1 \
 MAX_SAMPLES=60 NUM_WORKERS=8 ./run_api_debug.sh
 ```
 

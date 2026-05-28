@@ -40,6 +40,13 @@ else
   if [[ "${OCR_TRANSCRIPT_TO_GROUNDING:-0}" == "1" ]]; then
     OCR_TRANSCRIPT_ARGS+=(--ocr-transcript-to-grounding)
   fi
+  OCR_LAYOUT_ARGS=()
+  if [[ "${REQUIRE_OCR_LAYOUT_CACHE:-0}" == "1" ]]; then
+    OCR_LAYOUT_ARGS+=(--require-ocr-layout-cache)
+  fi
+  if [[ "${OCR_LAYOUT_TO_STAGE1:-0}" == "1" ]]; then
+    OCR_LAYOUT_ARGS+=(--ocr-layout-to-stage1)
+  fi
   "$PYTHON_BIN" baselines/DocShield/run_staged_docshield_api.py \
     --model "${MODEL:-qwen3.6-35b-a3b}" \
     --ocr-model "${OCR_MODEL:-}" \
@@ -47,6 +54,10 @@ else
     --ocr-transcript-api-key-file "${OCR_TRANSCRIPT_API_KEY_FILE:-}" \
     --ocr-transcript-max-chars "${OCR_TRANSCRIPT_MAX_CHARS:-6000}" \
     --ocr-transcript-cache-dir "${OCR_TRANSCRIPT_CACHE_DIR:-outputs/cache/ocr_transcripts}" \
+    --ocr-layout-cache-model "${OCR_LAYOUT_CACHE_MODEL:-qwen-vl-ocr}" \
+    --ocr-layout-cache-dir "${OCR_LAYOUT_CACHE_DIR:-outputs/cache/ocr_layouts}" \
+    --ocr-layout-max-spans "${OCR_LAYOUT_MAX_SPANS:-0}" \
+    --ocr-layout-max-chars "${OCR_LAYOUT_MAX_CHARS:-16000}" \
     --input-jsonl data/val_300.jsonl \
     --output-jsonl "$RAW_JSONL" \
     --api-key-file "${API_KEY_FILE:-/Users/penpen/Desktop/api-key.txt}" \
@@ -64,5 +75,6 @@ else
     ${BENIGN_REVIEWER_ARGS[@]+"${BENIGN_REVIEWER_ARGS[@]}"} \
     ${TAXONOMY_PROMPT_ARGS[@]+"${TAXONOMY_PROMPT_ARGS[@]}"} \
     ${OCR_TRANSCRIPT_ARGS[@]+"${OCR_TRANSCRIPT_ARGS[@]}"} \
+    ${OCR_LAYOUT_ARGS[@]+"${OCR_LAYOUT_ARGS[@]}"} \
     --resume
 fi
