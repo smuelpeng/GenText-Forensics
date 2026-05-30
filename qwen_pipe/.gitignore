@@ -1,0 +1,7 @@
+api-key.txt
+.env
+.venv/
+outputs/
+__pycache__/
+*.pyc
+.DS_Store
