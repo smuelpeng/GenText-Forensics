@@ -22,6 +22,10 @@ scripts/run_best_v529_rescue.sh
 See `docs/v529_best_summary.md` for the kept mechanisms, rejected lessons, and
 remaining failure surface.
 
+For cluster validation, use `scripts/cluster_validate_v529.sh` with
+`docs/cluster_validation.md`. For algorithm-reproduction lessons, see
+`docs/algorithm_reproduction_experience.md`.
+
 `qwen_pipe/` is an isolated local branch for Qwen-based document-forensics tuning. In this promoted branch it lives inside `debug_distribution/`; in the earlier local workspace it lived as a sibling `pipe/` directory. It references the surrounding `debug_distribution` checkout for the existing dataset, OCR cache conventions, and evaluator, but keeps Qwen-pipe scripts, notes, outputs, and ledgers under this folder.
 
 This separation is intentional: do not put Qwen-pipe prompts, postprocessors, or experiment ledgers into `debug_distribution/baselines/DocShield/` unless a change is later promoted back explicitly.
@@ -34,9 +38,14 @@ qwen_pipe/
 ├── configs/
 │   └── qwen_pipe.env.example
 ├── docs/
-│   └── tuning_loop.md
+│   ├── algorithm_reproduction_experience.md
+│   ├── cluster_validation.md
+│   ├── tuning_loop.md
+│   └── v529_best_summary.md
 ├── scripts/
-│   └── qwen_pipe_loop.sh
+│   ├── cluster_validate_v529.sh
+│   ├── qwen_pipe_loop.sh
+│   └── run_best_v529_rescue.sh
 └── outputs/                  # ignored local run artifacts
 ```
 
